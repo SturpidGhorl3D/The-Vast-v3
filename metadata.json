@@ -1,0 +1,6 @@
+{
+  "name": "THE VAST Alpha v 1.2.0",
+  "description": "A high-performance 2D space simulation with procedural generation, ECS and DOTS architecture, and deep logistics.\nUsed graphics engine: Babylon.js, WebGPU\nBase Engine: Next.js",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
