@@ -1,20 +1,18 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# THE VAST
 
-# Run and deploy your AI Studio app
+**Высокопроизводительная процедурная 2D космическая симуляция.**
 
-This contains everything you need to run your app locally.
+THE VAST — это амбициозный проект в жанре космической песочницы, сочетающий в себе процедурную генерацию галактики, детальное судостроение и глубокую экономическую логистику.
 
-View your app in AI Studio: https://ai.studio/apps/b6b0b9d2-3f9b-40d6-b4a1-2d9a51f13d78
+### Основные концепции
+*   **Движок**: Высокопроизводительная реализация ECS (Entity Component System) на TypeScript, отрисовка через Babylon.js и WebGPU для шейдерной магии.
+*   **Архитектура**: Реальное время, сложная симуляция экономики и логистики, процедурная генерация кораблей на основе логического "ДНК".
+*   **Игровой процесс**: Свободный выбор пути от независимого капитана до торгового магната или корсара.
 
-## Run Locally
+### Ключевые системы
+*   **Ship Editor**: Продвинутый конструктор кораблей с поддержкой зеркальной симметрии, автоматическим расчетом массы и функциональными модулями (мосты, реакторы, орудия).
+*   **Procedural World**: Бесконечная процедурная генерация звездных систем с уникальными ресурсами и фракциями.
+*   **Economy & Trade**: Глубокая логистическая цепочка от добычи сырья до производства высокотехнологичных компонентов.
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+---
+*Разработано на базе Next.js 15, Babylon.js и React 19.*
