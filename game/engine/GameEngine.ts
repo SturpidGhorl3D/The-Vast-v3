@@ -614,8 +614,8 @@ export class GameEngine {
     clampCameraZoom(camera, renderer.width, renderer.height, zm, hullRef as any);
   }
 
-  public static readonly TICK_RATE = 30;
-  public static readonly MS_PER_TICK = 1000 / 30;
+  public static readonly TICK_RATE = 60;
+  public static readonly MS_PER_TICK = 1000 / 60;
   private accumulator: number = 0;
 
   public update(time: number) {
@@ -632,7 +632,7 @@ export class GameEngine {
 
     while (this.accumulator >= GameEngine.MS_PER_TICK) {
       this.currentTime += GameEngine.MS_PER_TICK;
-      this.tick(2.0); // 2.0 "60-fps equivalent frames" per fixed 30 TPS tick
+      this.tick(1.0); // 1.0 units per tick @ 60 TPS
       this.accumulator -= GameEngine.MS_PER_TICK;
     }
   }

@@ -57,10 +57,10 @@ export class Renderer {
 
     this.scene.activeCamera = this.camera;
 
-    this.graphics = new Graphics2D(this.scene);
-    this.projectileGraphics = new Graphics2D(this.scene);
+    this.graphics = new Graphics2D(this.scene, 1);
+    this.projectileGraphics = new Graphics2D(this.scene, 2);
 
-    this.worldRenderer = new WorldRenderer(this.graphics as any);
+    this.worldRenderer = new WorldRenderer(this.graphics as any, this.scene);
     this.shipRenderer = new ShipRenderer(this.graphics as any);
     this.shipRenderer.setFXGraphics(this.projectileGraphics as any);
     
@@ -108,6 +108,9 @@ export class Renderer {
     if (this.celestialRenderer) {
       this.celestialRenderer.beginFrame();
     }
+    if (this.worldRenderer) {
+      this.worldRenderer.beginFrame();
+    }
 
     this.graphics.clear();
     this.projectileGraphics.clear();
@@ -147,20 +150,8 @@ export class Renderer {
     this.worldRenderer.drawAsteroid(asteroid, cluster, camera, this.width, this.height, isMarked, isMiningTarget);
   }
 
-  drawAsteroidCluster(cluster: any, camera: Camera, isFaint: boolean = false) {
-    this.worldRenderer.drawAsteroidCluster(cluster, camera, this.width, this.height, isFaint);
-  }
-
   drawSpaceStation(coords: GlobalCoords, camera: Camera, width: number, height: number, color: string) {
     this.worldRenderer.drawSpaceStation(coords, camera, width, height, color);
-  }
-
-  public updateAsteroidNoiseMap(buffer: Uint8Array, width: number, height: number) {
-    this.worldRenderer.updateAsteroidNoiseMap(buffer, width, height);
-  }
-
-  public drawAsteroidNoiseMap(camera: Camera, minX: number, minY: number, maxX: number, maxY: number) {
-    this.worldRenderer.drawAsteroidNoiseMap(camera, this.width, this.height, minX, minY, maxX, maxY);
   }
 
   drawGrid(camera: Camera, spacing: number) {

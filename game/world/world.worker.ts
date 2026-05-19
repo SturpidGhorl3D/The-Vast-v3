@@ -12,8 +12,8 @@ function checkFieldStrength(cx: number, cy: number, currentSystemData: any, near
   if (!noise2D) return 0;
 
   // Faster skip: if base noise is extremely low, it won't be a field anyway
-  const baseNoise = (noise2D(cx * 1e-10, cy * 1e-10) + 1) / 2;
-  if (baseNoise < 0.3) return 0;
+  const baseNoise = (noise2D(cx * 1.5e-5, cy * 1.5e-5) + 1) / 2;
+  if (baseNoise < 0.25) return 0;
   
   let maxStrength = 0;
   const systemLimitSq = 1.40625e27; // (3.75e13)^2, approx 250 AU
@@ -23,28 +23,50 @@ function checkFieldStrength(cx: number, cy: number, currentSystemData: any, near
     const dy = cy - sys.cy;
     const dSq = dx * dx + dy * dy;
     
-    if (dSq < systemLimitSq && sys.asteroidBelts) {
+    if (dSq < systemLimitSq) {
        const distToStar = Math.sqrt(dSq);
        if (distToStar >= sys.starRadius * 4) {
-         for (let j = 0; j < sys.asteroidBelts.length; j++) {
-           const belt = sys.asteroidBelts[j];
-           const margin = 150_000_000;
-           if (distToStar > belt.minRadius - margin && distToStar < belt.maxRadius + margin) {
-             const noiseVal = baseNoise - belt.threshold;
-             if (noiseVal > 0) {
-                 const beltMid = (belt.minRadius + belt.maxRadius) / 2;
-                 const beltHalfWidth = (belt.maxRadius - belt.minRadius) / 2 + margin;
-                 const distFromMid = Math.abs(distToStar - beltMid);
-                 const edgeFade = 1.0 - Math.min(1.0, distFromMid / beltHalfWidth);
-                 
-                 // Resulting strength 0..1
-                 return Math.min(1.0, noiseVal / (1.1 - belt.threshold)) * edgeFade;
+         if (sys.asteroidBelts) {
+           for (let j = 0; j < sys.asteroidBelts.length; j++) {
+             const belt = sys.asteroidBelts[j];
+             const margin = 1000000; // Match manager margin 1000km
+             if (distToStar > belt.minRadius - margin && distToStar < belt.maxRadius + margin) {
+               const noiseVal = baseNoise - (belt.threshold * 0.9); // Match manager threshold leniency
+               if (noiseVal > 0) {
+                   const beltMid = (belt.minRadius + belt.maxRadius) / 2;
+                   const beltHalfWidth = (belt.maxRadius - belt.minRadius) / 2 + margin;
+                   const distFromMid = Math.abs(distToStar - beltMid);
+                   const edgeFade = 1.0 - Math.min(1.0, distFromMid / beltHalfWidth);
+                   
+                   const strength = Math.min(1.0, noiseVal / (1.1 - belt.threshold)) * edgeFade;
+                   if (strength > maxStrength) maxStrength = strength;
+               }
              }
            }
          }
+         
+         if (sys.asteroidClusters) {
+           for (let j = 0; j < sys.asteroidClusters.length; j++) {
+             const cluster = sys.asteroidClusters[j];
+             const cX = Math.cos(cluster.orbitAngle) * cluster.orbitRadius;
+             const cY = Math.sin(cluster.orbitAngle) * cluster.orbitRadius;
+             const distToCluster = Math.hypot(dx - cX, dy - cY);
+             
+             if (distToCluster < cluster.radius) {
+               const noiseVal = baseNoise - (1.0 - cluster.density * 0.5); // Density affects threshold
+               if (noiseVal > 0) {
+                   const edgeFade = 1.0 - (distToCluster / cluster.radius);
+                   const strength = Math.min(1.0, noiseVal / 0.5) * edgeFade;
+                   if (strength > maxStrength) maxStrength = strength;
+               }
+             }
+           }
+         }
+         
+         return maxStrength;
        }
     }
-    return 0;
+    return maxStrength;
   };
 
   if (nearbySystems && nearbySystems.length > 0) {
@@ -76,8 +98,8 @@ function checkFieldStrength(cx: number, cy: number, currentSystemData: any, near
   // Deep space: if no strong system field, check deep noise
   if (maxStrength < 1.0) {
     const deepNoise = (noise2D(cx * 4e-11, cy * 4e-11) + 1) / 2;
-    if (deepNoise > 0.55 && baseNoise > 0.35) {
-       const deepStrength = Math.min(1, (deepNoise - 0.55) / 0.4) * Math.min(1, (baseNoise - 0.35) / 0.6);
+    if (deepNoise > 0.42 && baseNoise > 0.3) {
+       const deepStrength = Math.min(1, (deepNoise - 0.42) / 0.4) * Math.min(1, (baseNoise - 0.3) / 0.6);
        const finalDeep = deepStrength * 0.75;
        if (finalDeep > maxStrength) maxStrength = finalDeep;
     }
@@ -125,18 +147,23 @@ self.onmessage = (e: MessageEvent) => {
         const ax = cx + (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 2.0;
         const ay = cy + (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 2.0;
         
-        const secSize = 10_000_000_000;
-        const secX = BigInt(Math.floor(ax / secSize));
-        const secY = BigInt(Math.floor(ay / secSize));
-
+        const secSize = 10_000_000_000n;
+        const axBI = BigInt(Math.floor(ax));
+        const ayBI = BigInt(Math.floor(ay));
+        
+        const secX = axBI / secSize;
+        const secY = ayBI / secSize;
+        const oX = Number(axBI % secSize);
+        const oY = Number(ayBI % secSize);
+        
         const totalCapacity = Math.floor(Math.pow(radius / 100, 3) * 1000);
         
         asteroids.push({
            id: `ast-${q}-${r}-${i}`,
            sectorX: secX,
            sectorY: secY,
-           offsetX: ax - Number(secX) * secSize,
-           offsetY: ay - Number(secY) * secSize,
+           offsetX: oX,
+           offsetY: oY,
            rx: ax, 
            ry: ay,
            radius,
@@ -148,65 +175,5 @@ self.onmessage = (e: MessageEvent) => {
     }
 
     self.postMessage({ type: 'CHUNK_DONE', id, payload: { asteroids } });
-  }
-
-  else if (type === 'GENERATE_NOISE_MAP') {
-      const { minX, minY, maxX, maxY, width, height, currentSystemData, playerPos, nearbySystems } = payload;
-      
-      const iWidth = Math.floor(width);
-      const iHeight = Math.floor(height);
-      const len = iWidth * iHeight * 4;
-      
-      if (!isFinite(len) || len <= 0 || len > 10 * 1024 * 1024) {
-          console.warn("Invalid noise map dimensions:", width, height);
-          self.postMessage({ type: 'NOISE_MAP_DONE', payload: { buffer: new Uint8Array(0), width: 0, height: 0 } });
-          return;
-      }
-      
-      const buffer = new Uint8Array(len);
-      const stepX = (maxX - minX) / iWidth;
-      const stepY = (maxY - minY) / iHeight;
-
-      // Distance limit: 10 LY = 9.46e16 meters
-      const LIMIT_SQ = Math.pow(9.46e16, 2);
-      
-      // Secondary filter for systems actually inside or near this noise map viewport
-      // to avoid checking 20 systems if only 2 are relevant for the current slice
-      const margin = (maxX - minX) * 0.5 + 1.25e13;
-      const activeSystems = nearbySystems ? nearbySystems.filter((s: any) => {
-          const dx = s.cx - (minX + maxX) / 2;
-          const dy = s.cy - (minY + maxY) / 2;
-          return (dx * dx + dy * dy) < margin * margin;
-      }) : [];
-
-      for (let y = 0; y < iHeight; y++) {
-          const wy = minY + y * stepY;
-          const rowOffset = y * iWidth;
-          for (let x = 0; x < iWidth; x++) {
-              const wx = minX + x * stepX;
-              const i = (rowOffset + x) * 4;
-              
-              // Skip if too far from player ship
-              const dx = wx - playerPos.x;
-              const dy = wy - playerPos.y;
-              if (dx*dx + dy*dy > LIMIT_SQ) {
-                  continue;
-              }
-
-              const strength = checkFieldStrength(wx, wy, currentSystemData, activeSystems);
-              if (strength > 0.02) {
-                  // Core field (dark blue-grey mist) darkened per request
-                  // Slightly higher alpha for clarity, modulated by strength
-                  const alpha = Math.floor(strength * 90);
-                  buffer[i] = 40; buffer[i+1] = 50; buffer[i+2] = 65; buffer[i+3] = alpha; 
-              }
-          }
-      }
-
-      (self as unknown as Worker).postMessage({ 
-          type: 'NOISE_MAP_DONE', 
-          id, 
-          payload: { buffer, minX, minY, maxX, maxY, width: iWidth, height: iHeight, systemId: currentSystemData?.id } 
-      }, [buffer.buffer]);
   }
 };

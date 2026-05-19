@@ -88,8 +88,8 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
         <div className="flex gap-1">
           {(
             [
-              ['X (Л/П)', symmetryY, setSymmetryY, 'symmetryY'],
-              ['Y (В/Н)', symmetryX, setSymmetryX, 'symmetryX']
+              ['Y (Л/П)', symmetryY, setSymmetryY, 'symmetryY'],
+              ['X (В/Н)', symmetryX, setSymmetryX, 'symmetryX']
             ] as [string, boolean, (v: boolean) => void, string][]
           ).map(([label, val, setter, key]) => (
             <button
@@ -120,8 +120,8 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
           <div className="flex gap-1">
             {(
               [
-                ['X (Л/П)', symmetryY, setSymmetryY, 'symmetryY'],
-                ['Y (В/Н)', symmetryX, setSymmetryX, 'symmetryX']
+                ['Y (Л/П)', symmetryY, setSymmetryY, 'symmetryY'],
+                ['X (В/Н)', symmetryX, setSymmetryX, 'symmetryX']
               ] as [string, boolean, (v: boolean) => void, string][]
             ).map(([label, val, setter, key]) => (
               <button

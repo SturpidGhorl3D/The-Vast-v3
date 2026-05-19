@@ -2,15 +2,20 @@ import * as BABYLON from '@babylonjs/core';
 import { BaseRenderer } from './BaseRenderer';
 import { Camera } from '../camera';
 import { GlobalCoords } from '../../../components/game/types';
+import { NoiseLUT } from './NoiseLUT';
 
 export class CelestialRenderer extends BaseRenderer {
   private scene: BABYLON.Scene;
   private meshPool: { mesh: BABYLON.Mesh, mat: BABYLON.ShaderMaterial }[] = [];
   private activeMeshes: { mesh: BABYLON.Mesh, mat: BABYLON.ShaderMaterial }[] = [];
+  private noiseTex3D: BABYLON.RawTexture3D;
 
   constructor(scene: BABYLON.Scene) {
     super(null as any); 
     this.scene = scene;
+    
+    // Create 3D noise texture for performance
+    this.noiseTex3D = NoiseLUT.createNoiseTexture3D(scene, 32);
     
     if (!BABYLON.Effect.ShadersStore["celestialVertexShader"]) {
         BABYLON.Effect.ShadersStore["celestialVertexShader"] = `
@@ -27,8 +32,12 @@ export class CelestialRenderer extends BaseRenderer {
         
         BABYLON.Effect.ShadersStore["celestialFragmentShader"] = `
             precision highp float;
+            precision highp sampler3D;
+            
             varying vec2 vUV;
 
+            uniform sampler3D uNoiseTex3D;
+            
             uniform vec4 uBaseColor;
             uniform vec3 uScatteringColor;
             uniform float uRadius;
@@ -42,26 +51,14 @@ export class CelestialRenderer extends BaseRenderer {
             uniform float uSurfaceRotation;
             uniform float uCloudRotation;
             uniform float uScale;
+            uniform float uMargin;
 
-            float hash(vec3 p3) {
-                vec3 p = fract(p3 * 0.1031);
-                p += dot(p, p.yzx + 19.19);
-                return fract((p.x + p.y) * p.z);
-            }
-
+            // Sample highly optimized 3D noise from LUT
             float noise(vec3 x) {
-                vec3 i = floor(x);
-                vec3 f = fract(x);
-                f = f * f * (3.0 - 2.0 * f);
-            
-                float n000 = hash(i + vec3(0.0,0.0,0.0)); float n100 = hash(i + vec3(1.0,0.0,0.0));
-                float n010 = hash(i + vec3(0.0,1.0,0.0)); float n110 = hash(i + vec3(1.0,1.0,0.0));
-                float n001 = hash(i + vec3(0.0,0.0,1.0)); float n101 = hash(i + vec3(1.0,0.0,1.0));
-                float n011 = hash(i + vec3(0.0,1.0,1.0)); float n111 = hash(i + vec3(1.0,1.0,1.0));
-
-                float mixZ0 = mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y);
-                float mixZ1 = mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y);
-                return mix(mixZ0, mixZ1, f.z);
+                // Using 3D texture sample wrapped 
+                float n = textureLod(uNoiseTex3D, x * 0.1, 0.0).r;
+                n = n * n * (3.0 - 2.0 * n); // Smoothstep curve
+                return n;
             }
             
             float fbm(vec3 p) {
@@ -78,7 +75,6 @@ export class CelestialRenderer extends BaseRenderer {
             float detailNoise(vec3 p) {
                 float f = 0.0;
                 float w = 0.5;
-                // Optimized detail noise loop locally
                 for (int i = 0; i < 2; i++) {
                     f += w * noise(p);
                     p *= 3.5;
@@ -95,7 +91,7 @@ export class CelestialRenderer extends BaseRenderer {
 
             void main() {
                 vec2 p = vUV * 2.0 - 1.0; 
-                float margin = uType == 0.0 ? 8.0 : 2.5; 
+                float margin = uMargin;
                 p *= margin; 
                 
                 float d = length(p);
@@ -142,7 +138,7 @@ export class CelestialRenderer extends BaseRenderer {
                     
                     vec3 outsideGlow = uBaseColor.rgb * glowIntensity;
                     outsideGlow += vec3(1.0, 0.95, 0.9) * rays * glowIntensity * 1.5;
-                    outsideGlow *= smoothstep(margin, margin * 0.8, d); // fade out at edge of box
+                    outsideGlow *= smoothstep(uMargin, uMargin * 0.8, d); // fade out at edge of box
                     
                     // Fade out the glow if the star is very small (LOD effect)
                     // At uRadius = 15.0, full glow. At uRadius = 2.0, glow fades out completely.
@@ -317,12 +313,14 @@ export class CelestialRenderer extends BaseRenderer {
                  "worldViewProjection",
                  "uBaseColor", "uScatteringColor", "uAtmosphereParams",
                  "uRadius", "uType", "uTime", "uZoom", "uLightDir", "uLightIntensity",
-                 "uAxisTilt", "uSurfaceRotation", "uCloudRotation", "uScale"
+                 "uAxisTilt", "uSurfaceRotation", "uCloudRotation", "uScale", "uMargin"
              ],
+             samplers: ["uNoiseTex3D"],
              needAlphaBlending: true
          }
      );
 
+     mat.setTexture("uNoiseTex3D", this.noiseTex3D);
      mat.backFaceCulling = false;
      mat.disableLighting = true;
      // CRITICAL: Premultiplied alpha mode for combined occlusion (alpha=1) and additive glow (alpha=0)!
@@ -331,6 +329,7 @@ export class CelestialRenderer extends BaseRenderer {
 
      const mesh = BABYLON.MeshBuilder.CreatePlane("celestialSphere", { size: 1 }, this.scene);
      mesh.material = mat;
+     mesh.renderingGroupId = 0;
 
      return { mesh, mat };
   }
@@ -358,7 +357,12 @@ export class CelestialRenderer extends BaseRenderer {
     
     if (screenRadius < 4.0) return false;
 
-    const margin = type === 'STAR' ? 8.0 : 2.5;
+    let margin = 2.5;
+    if (type === 'STAR') {
+        margin = screenRadius > 10000 ? 1.2 : (screenRadius > 2000 ? 2.0 : 8.0);
+    } else {
+        margin = screenRadius > 10000 ? 1.05 : 2.5;
+    }
     let boxSize = screenRadius * margin * 2.0;
     if (boxSize < 16) boxSize = 16;
 
@@ -373,6 +377,7 @@ export class CelestialRenderer extends BaseRenderer {
 
     celestialObj.mesh.position.x = screen.x;
     celestialObj.mesh.position.y = -screen.y; 
+    celestialObj.mesh.position.z = 100.0;
     
     celestialObj.mesh.scaling.x = boxSize;
     celestialObj.mesh.scaling.y = boxSize;
@@ -382,6 +387,7 @@ export class CelestialRenderer extends BaseRenderer {
     mat.setFloat("uZoom", camera.zoom);
     mat.setFloat("uRadius", screenRadius);
     mat.setFloat("uScale", boxSize);
+    mat.setFloat("uMargin", margin);
     
     const uBaseColor = this.parseColor(data.color || data.starColor || '#ffffff');
     const r = ((uBaseColor.color >> 16) & 0xFF) / 255.0;

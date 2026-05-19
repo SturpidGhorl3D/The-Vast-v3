@@ -483,6 +483,7 @@ export const useEditorInteraction = ({
           dragStatesRef.current.isDraggingCompartment = true;
           setActiveCompartment(found);
           engine.activeCompartment = found;
+          (engine as any).compartmentDragOffset = { x: found.x - worldPos.x, y: found.y - worldPos.y };
         } else {
           dragStatesRef.current.isDragging = true;
         }
@@ -859,7 +860,9 @@ function handleCompartmentVertexDrag(worldPos: Point, engine: any, hull: any, mi
 
 function handleCompartmentDrag(worldPos: Point, engine: any, hull: any) {
   const comp = engine.activeCompartment;
-  const snX = Math.round(worldPos.x); const snY = Math.round(worldPos.y);
+  const off = (engine as any).compartmentDragOffset || { x: 0, y: 0 };
+  const snX = Math.round((worldPos.x + off.x) / 5) * 5; 
+  const snY = Math.round((worldPos.y + off.y) / 5) * 5;
   const dx = snX - comp.x; const dy = snY - comp.y;
   if (dx !== 0 || dy !== 0) {
     comp.x = snX; comp.y = snY;

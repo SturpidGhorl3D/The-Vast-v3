@@ -4,6 +4,7 @@ import { Camera } from '../camera';
 import { GlobalCoords } from '../../../components/game/types';
 import { ASTEROID_CHUNK_SIZE } from '../../world/AsteroidGridManager';
 import { SECTOR_SIZE_M } from '../camera';
+import { NoiseLUT } from './NoiseLUT';
 
 import * as BABYLON from '@babylonjs/core';
 import { CelestialRenderer } from './CelestialRenderer';
@@ -11,41 +12,194 @@ import { CelestialRenderer } from './CelestialRenderer';
 export class WorldRenderer extends BaseRenderer {
   private celestialRenderer: CelestialRenderer | null = null;
   private scene: BABYLON.Scene | null = null;
+  private noiseTex3D: BABYLON.RawTexture3D | null = null;
+  private asteroidRingPool: { mesh: BABYLON.Mesh, mat: BABYLON.ShaderMaterial }[] = [];
+  private activeAsteroidRings: { mesh: BABYLON.Mesh, mat: BABYLON.ShaderMaterial }[] = [];
   
-  private noiseTex: BABYLON.DynamicTexture | null = null;
-  private noiseMat: BABYLON.StandardMaterial | null = null;
-  private noiseMesh: BABYLON.Mesh | null = null;
+  private asteroidThinMesh: BABYLON.Mesh | null = null;
+  private maxAsteroidInstances = 4000;
+  private asteroidInstanceMatrices: Float32Array = new Float32Array(this.maxAsteroidInstances * 16);
+  private asteroidInstanceColors: Float32Array = new Float32Array(this.maxAsteroidInstances * 4);
 
   constructor(graphics: any, scene?: BABYLON.Scene) {
     super(graphics);
     if (scene) {
        this.scene = scene;
-       this.initNoiseMap(scene);
+       this.noiseTex3D = NoiseLUT.createNoiseTexture3D(scene, 32);
+       this.initAsteroidShader(scene);
+       this.initAsteroidThinMesh(scene);
     }
+  }
+
+  public setScene(scene: BABYLON.Scene) {
+      this.scene = scene;
+      if (!this.noiseTex3D) {
+          this.noiseTex3D = NoiseLUT.createNoiseTexture3D(scene, 32);
+      }
+      this.initAsteroidShader(scene);
+      this.initAsteroidThinMesh(scene);
+  }
+
+  private initAsteroidThinMesh(scene: BABYLON.Scene) {
+      if (!this.asteroidThinMesh) {
+          const mat = new BABYLON.StandardMaterial("asteroidThinMat", scene);
+          mat.disableLighting = true;
+          mat.emissiveColor = BABYLON.Color3.White();
+          mat.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+          
+          // A hexagon or octagon is enough for small asteroids
+          this.asteroidThinMesh = BABYLON.MeshBuilder.CreateDisc("asteroidThinMesh", { radius: 1, tessellation: 12 }, scene);
+          this.asteroidThinMesh.material = mat;
+          this.asteroidThinMesh.renderingGroupId = 1;
+          this.asteroidThinMesh.isPickable = false;
+          
+          this.asteroidThinMesh.thinInstanceSetBuffer("matrix", this.asteroidInstanceMatrices, 16, false);
+          this.asteroidThinMesh.thinInstanceSetBuffer("color", this.asteroidInstanceColors, 4, false);
+      }
+  }
+
+  private initAsteroidShader(scene: BABYLON.Scene) {
+      if (!BABYLON.Effect.ShadersStore["asteroidRingVertexShader"]) {
+          BABYLON.Effect.ShadersStore["asteroidRingVertexShader"] = `
+              precision highp float;
+              attribute vec3 position;
+              attribute vec2 uv;
+              uniform mat4 worldViewProjection;
+              varying vec2 vUV;
+              void main() {
+                  vUV = uv;
+                  gl_Position = worldViewProjection * vec4(position, 1.0);
+              }
+          `;
+          
+          BABYLON.Effect.ShadersStore["asteroidRingFragmentShader"] = `
+              precision highp float;
+              precision highp sampler3D;
+              varying vec2 vUV;
+              uniform sampler3D uNoiseTex3D;
+              uniform float uTime;
+              uniform float uMinRadius;
+              uniform float uMaxRadius;
+              uniform float uDensity;
+              uniform vec2 uResolution;
+              uniform vec2 uRingCenterScreen; 
+              uniform vec2 uWorldCenter; 
+              uniform vec2 uCameraWorldPos; // Camera position in world meters
+              uniform float uCameraAngle;   // Camera rotation angle
+              uniform float uZoom;
+              uniform int uIsField; 
+              
+              float sampleNoise(vec3 p) {
+                  return textureLod(uNoiseTex3D, p, 0.0).r;
+              }
+              
+              void main() {
+                  vec2 pixelCoord = vec2(vUV.x * uResolution.x, uResolution.y - (vUV.y * uResolution.y));
+                  vec2 diff = pixelCoord - uRingCenterScreen;
+                  
+                  // screenR is the distance from the center of the mesh in pixels
+                  float screenR = length(diff);
+                  
+                  if (screenR < uMinRadius || screenR > uMaxRadius) discard;
+                  
+                  // Map to world coordinates space using uZoom and uCameraAngle
+                  // Screen Y is down, world Y is up.
+                  float ca = cos(-uCameraAngle);
+                  float sa = sin(-uCameraAngle);
+                  vec2 screenRel = (pixelCoord - uResolution * 0.5) / uZoom;
+                  screenRel.y = -screenRel.y; 
+                  
+                  vec2 worldPos = uCameraWorldPos + vec2(
+                      screenRel.x * ca - screenRel.y * sa,
+                      screenRel.x * sa + screenRel.y * ca
+                  );
+                  
+                  // Compute radius in world space for perfect stability against noise
+                  vec2 relPos = worldPos - uWorldCenter;
+                  float radiusMeters = length(relPos);
+                  float screenR = radiusMeters * uZoom;
+                  
+                  float alpha = 0.0;
+                  float n = 0.0;
+                  
+                  if (uIsField == 1) {
+                      // Generic field: World-stable noise
+                      vec3 noisePos = vec3(worldPos * 0.00001, uTime * 0.02);
+                      n = sampleNoise(noisePos) * 0.6 + sampleNoise(noisePos * 4.3) * 0.4;
+                      
+                      float edgeFade = smoothstep(uMaxRadius, uMaxRadius * 0.8, screenR);
+                      if (uMinRadius > 1.0) {
+                          edgeFade *= smoothstep(uMinRadius, uMinRadius * 1.2, screenR);
+                      }
+                      
+                      alpha = smoothstep(0.65, 0.75, n) * edgeFade * uDensity * 0.8;
+                  } else {
+                      // Circular Ring
+                      vec2 relPos = worldPos - uWorldCenter;
+                      float angle = atan(relPos.y, relPos.x);
+                      float radiusMeters = length(relPos);
+                      
+                      float distFromMid = abs(screenR - (uMinRadius + uMaxRadius) * 0.5);
+                      float halfWidth = (uMaxRadius - uMinRadius) * 0.5;
+                      float edgeFade = 1.0 - clamp(distFromMid / halfWidth, 0.0, 1.0);
+                      
+                      if (uZoom <= 0.01) {
+                          n = 0.5;
+                          alpha = pow(edgeFade, 1.2) * uDensity * 0.5;
+                      } else {
+                          vec3 noisePos = vec3(cos(angle) * 8.0, sin(angle) * 8.0, radiusMeters * 0.000005 + uTime * 0.04);
+                          n = sampleNoise(noisePos * 0.5) * 0.6 + sampleNoise(noisePos * 3.0) * 0.4;
+                          alpha = smoothstep(0.6, 0.8, n) * pow(edgeFade, 1.4) * uDensity;
+                      }
+                  }
+                  
+                  if (alpha < 0.05) discard;
+                  
+                  vec3 color = mix(vec3(0.5, 0.45, 0.4), vec3(0.6, 0.6, 0.65), n);
+                  gl_FragColor = vec4(color * alpha, alpha);
+              }
+          `;
+      }
+  }
+
+  private getAsteroidRingObj(): { mesh: BABYLON.Mesh, mat: BABYLON.ShaderMaterial } {
+      if (this.asteroidRingPool.length > 0) {
+          return this.asteroidRingPool.pop()!;
+      }
+      const mat = new BABYLON.ShaderMaterial(
+          "asteroidRingMat",
+          this.scene!,
+          { vertex: "asteroidRing", fragment: "asteroidRing" },
+          {
+              attributes: ["position", "uv"],
+              uniforms: ["worldViewProjection", "uTime", "uMinRadius", "uMaxRadius", "uDensity", "uQuadSize", "uWorldCenter", "uCameraWorldPos", "uCameraAngle", "uZoom", "uIsField"],
+              samplers: ["uNoiseTex3D"],
+              needAlphaBlending: true
+          }
+      );
+      mat.backFaceCulling = false;
+      mat.disableLighting = true;
+      mat.alphaMode = BABYLON.Engine.ALPHA_PREMULTIPLIED; 
+      if (this.noiseTex3D) {
+          mat.setTexture("uNoiseTex3D", this.noiseTex3D);
+      }
+      
+      const mesh = BABYLON.MeshBuilder.CreatePlane("asteroidRingBase", { size: 2 }, this.scene!);
+      mesh.material = mat;
+      mesh.renderingGroupId = 0;
+      return { mesh, mat };
   }
 
   public setCelestialRenderer(celestial: CelestialRenderer) {
     this.celestialRenderer = celestial;
   }
-  
-  public setScene(scene: BABYLON.Scene) {
-      this.scene = scene;
-      this.initNoiseMap(scene);
-  }
 
-  public setApp(app: any) {
-     // No-op, was used for PIXI
-  }
-
-  private initNoiseMap(scene: BABYLON.Scene) {
-     if (this.noiseMesh) return;
-     this.noiseMesh = BABYLON.MeshBuilder.CreatePlane("noiseMap", {size: 1}, scene);
-     this.noiseMat = new BABYLON.StandardMaterial("noiseMat", scene);
-     this.noiseMat.disableLighting = true;
-     this.noiseMat.useAlphaFromDiffuseTexture = true;
-     this.noiseMat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-     this.noiseMesh.material = this.noiseMat;
-     this.noiseMesh.isVisible = false;
+  public beginFrame() {
+      for (const ring of this.activeAsteroidRings) {
+          ring.mesh.isVisible = false;
+          this.asteroidRingPool.push(ring);
+      }
+      this.activeAsteroidRings = [];
   }
 
   public updateAsteroidInstances(asteroids: any[], camera: Camera, width: number, height: number, now: number, targetId: string | null = null, miningTargetId: string | null = null) {
@@ -53,7 +207,8 @@ export class WorldRenderer extends BaseRenderer {
     const isZoomedOut = zoom < 0.05;
     const isVeryZoomedOut = zoom < 0.01;
 
-    // Cache pre-calculated camera constants
+    const isTactical = zoom < 0.01; 
+
     const halfW = width / 2;
     const halfH = height / 2;
     const camX = camera.pos.offsetX;
@@ -64,17 +219,16 @@ export class WorldRenderer extends BaseRenderer {
     const sinA = Math.sin(-camera.angle);
     const secSize = Number(SECTOR_SIZE_M);
 
-    // Limit number of rendered asteroids to prevent GPU overload
-    const maxAsteroids = 2000;
+    const maxAsteroids = Math.min(asteroids.length, this.maxAsteroidInstances);
     let count = 0;
+    let thinCount = 0;
 
-    for (let i = 0; i < asteroids.length && count < maxAsteroids; i++) {
+    for (let i = 0; i < asteroids.length && count < this.maxAsteroidInstances; i++) {
       const ast = asteroids[i];
       if (ast.depleted) continue;
 
-      // LOD: Faster skips
-      if (isVeryZoomedOut && ast.radius < 1000) continue;
-      if (isZoomedOut && ast.radius < 400) continue;
+      if (isVeryZoomedOut && ast.radius < (isTactical ? 200 : 1000)) continue;
+      if (isZoomedOut && ast.radius < (isTactical ? 100 : 400)) continue;
 
       const screenRadius = ast.radius * zoom;
       if (screenRadius < 0.5) continue;
@@ -93,11 +247,7 @@ export class WorldRenderer extends BaseRenderer {
         continue;
       }
 
-      count++;
-      
       const isTarget = ast.id === targetId || ast.id === miningTargetId;
-      
-      // Setup appearance
       const numColor = this.colorToNumber(ast.color);
       
       const isGlobal = zoom < 0.005;
@@ -108,17 +258,71 @@ export class WorldRenderer extends BaseRenderer {
       
       const alpha = Math.min(1.0, Math.max(0, (screenRadius - 0.5) / (5.0 - 0.5)));
       
-      this.graphics.circle(sx, sy, finalRadius);
-      this.graphics.fill({ color: isTarget ? 0xffffaa : numColor, alpha });
+      // Draw detailed polygons only when close enough
+      const isDetailed = zoom > 0.02 && screenRadius > 5.0;
       
-      if (isTarget) {
-          const sz = finalRadius * 1.5;
-          this.graphics.moveTo(sx - sz, sy); this.graphics.lineTo(sx - sz/2, sy);
-          this.graphics.moveTo(sx + sz, sy); this.graphics.lineTo(sx + sz/2, sy);
-          this.graphics.moveTo(sx, sy - sz); this.graphics.lineTo(sx, sy - sz/2);
-          this.graphics.moveTo(sx, sy + sz); this.graphics.lineTo(sx, sy + sz/2);
-          this.graphics.stroke({ color: 0xff4444, width: 2, alpha: 1 });
+      if (isDetailed) {
+          count++;
+          this.drawAsteroid(ast, null, camera, width, height, isTarget, ast.id === miningTargetId);
+      } else if (this.asteroidThinMesh) {
+          const r = ((numColor >> 16) & 0xff) / 255.0;
+          const g = ((numColor >> 8) & 0xff) / 255.0;
+          const b = (numColor & 0xff) / 255.0;
+          
+          const baseIdx = thinCount * 16;
+          this.asteroidInstanceMatrices[baseIdx] = finalRadius;     // m0
+          this.asteroidInstanceMatrices[baseIdx + 1] = 0;           // m1
+          this.asteroidInstanceMatrices[baseIdx + 2] = 0;           // m2
+          this.asteroidInstanceMatrices[baseIdx + 3] = 0;           // m3
+          this.asteroidInstanceMatrices[baseIdx + 4] = 0;           // m4
+          this.asteroidInstanceMatrices[baseIdx + 5] = finalRadius; // m5
+          this.asteroidInstanceMatrices[baseIdx + 6] = 0;           // m6
+          this.asteroidInstanceMatrices[baseIdx + 7] = 0;           // m7
+          this.asteroidInstanceMatrices[baseIdx + 8] = 0;           // m8
+          this.asteroidInstanceMatrices[baseIdx + 9] = 0;           // m9
+          this.asteroidInstanceMatrices[baseIdx + 10] = 1;          // m10
+          this.asteroidInstanceMatrices[baseIdx + 11] = 0;          // m11
+          this.asteroidInstanceMatrices[baseIdx + 12] = sx;         // m12 (x)
+          this.asteroidInstanceMatrices[baseIdx + 13] = -sy;        // m13 (y)
+          this.asteroidInstanceMatrices[baseIdx + 14] = 2.0;        // m14 (z)
+          this.asteroidInstanceMatrices[baseIdx + 15] = 1;          // m15
+          
+          const colIdx = thinCount * 4;
+          this.asteroidInstanceColors[colIdx] = isTarget ? 1.0 : r;
+          this.asteroidInstanceColors[colIdx + 1] = isTarget ? 1.0 : g;
+          this.asteroidInstanceColors[colIdx + 2] = isTarget ? 0.6 : b;
+          this.asteroidInstanceColors[colIdx + 3] = alpha;
+          
+          if (isTarget) {
+              const sz = finalRadius * 1.5;
+              this.graphics.moveTo(sx - sz, sy); this.graphics.lineTo(sx - sz/2, sy);
+              this.graphics.moveTo(sx + sz, sy); this.graphics.lineTo(sx + sz/2, sy);
+              this.graphics.moveTo(sx, sy - sz); this.graphics.lineTo(sx, sy - sz/2);
+              this.graphics.moveTo(sx, sy + sz); this.graphics.lineTo(sx, sy + sz/2);
+              this.graphics.stroke({ color: 0xff4444, width: 2, alpha: 1 });
+          }
+          count++;
+          thinCount++;
+      } else {
+          count++;
+          this.graphics.circle(sx, sy, finalRadius);
+          this.graphics.fill({ color: isTarget ? 0xffffaa : numColor, alpha });
+          if (isTarget) {
+              const sz = finalRadius * 1.5;
+              this.graphics.moveTo(sx - sz, sy); this.graphics.lineTo(sx - sz/2, sy);
+              this.graphics.moveTo(sx + sz, sy); this.graphics.lineTo(sx + sz/2, sy);
+              this.graphics.moveTo(sx, sy - sz); this.graphics.lineTo(sx, sy - sz/2);
+              this.graphics.moveTo(sx, sy + sz); this.graphics.lineTo(sx, sy + sz/2);
+              this.graphics.stroke({ color: 0xff4444, width: 2, alpha: 1 });
+          }
       }
+    }
+    
+    if (this.asteroidThinMesh) {
+        this.asteroidThinMesh.thinInstanceCount = thinCount;
+        this.asteroidThinMesh.thinInstanceBufferUpdated("matrix");
+        this.asteroidThinMesh.thinInstanceBufferUpdated("color");
+        this.asteroidThinMesh.isVisible = thinCount > 0;
     }
   }
 
@@ -165,7 +369,6 @@ export class WorldRenderer extends BaseRenderer {
       return;
     }
 
-    // Fallback: draw 4-pointed tactical marker if too small for WebGPU
     this.drawTacticalMarker(screenX, screenY, colorNum, 5);
   }
 
@@ -173,11 +376,9 @@ export class WorldRenderer extends BaseRenderer {
     const screen = camera.worldToScreen(pos, width, height);
     if (!screen || screen.x < 0 || screen.x > width || screen.y < 0 || screen.y > height) return;
     
-    // Draw white dots using base graphics circle
     this.graphics.circle(screen.x, screen.y, 1.5);
     this.graphics.fill({ color: 0xffffff, alpha: 0.8 });
     
-    // If very close, draw a small halo
     if (camera.zoom > 10) {
       this.graphics.circle(screen.x, screen.y, 3);
       this.graphics.fill({ color: 0xffffff, alpha: 0.2 });
@@ -185,6 +386,8 @@ export class WorldRenderer extends BaseRenderer {
   }
 
   public drawPlanet(data: any, camera: Camera, width: number, height: number, now: number, lightDir: {x: number, y: number} = {x: 0, y: 0}) {
+    if (data.type === 'ASTEROIDS') return; // Skip asteroid zones entirely
+
     if (this.celestialRenderer) {
       const handled = this.celestialRenderer.drawCelestial(data, camera, width, height, now / 1000, lightDir);
       if (handled) return;
@@ -229,27 +432,54 @@ export class WorldRenderer extends BaseRenderer {
     now: number
   ) {
     const screen = camera.worldToScreen(coords, width, height);
-    const screenMin = minRadius * camera.zoom;
-    const screenMax = maxRadius * camera.zoom;
+    const zoom = camera.zoom;
+    const rMin = minRadius * zoom;
+    const rMax = maxRadius * zoom;
 
-    if (screen.x + screenMax < 0 || screen.x - screenMax > width ||
-        screen.y + screenMax < 0 || screen.y - screenMax > height) {
-      return;
+    if (rMax < 0.5) return;
+
+    // Use GPU shader for fields/belts (Minecraft-seed-map "prediction" style)
+    if (this.scene && (Math.abs(maxRadius - minRadius) > 1000 || maxRadius > 1e9)) {
+        const ringObj = this.getAsteroidRingObj();
+        ringObj.mesh.isVisible = true;
+
+        // Position mesh in the middle of the screen
+        ringObj.mesh.position.set(width / 2, -height / 2, 10.0);
+        // Scale it exactly to the screen width and height
+        ringObj.mesh.scaling.set(width, height, 1);
+        
+        ringObj.mat.setFloat("uTime", now / 1000);
+        ringObj.mat.setFloat("uMinRadius", rMin);
+        ringObj.mat.setFloat("uMaxRadius", rMax);
+        ringObj.mat.setFloat("uDensity", 0.6);
+        ringObj.mat.setFloat("uZoom", zoom);
+        ringObj.mat.setFloat("uCameraAngle", camera.angle);
+        
+        // Pass resolution and ring center
+        ringObj.mat.setVector2("uResolution", new BABYLON.Vector2(width, height));
+        ringObj.mat.setVector2("uRingCenterScreen", new BABYLON.Vector2(screen.x, screen.y));
+        
+        // Pass World Center for noise stability
+        const worldX = Number(coords.sectorX * BigInt(SECTOR_SIZE_M)) + coords.offsetX;
+        const worldY = Number(coords.sectorY * BigInt(SECTOR_SIZE_M)) + coords.offsetY;
+        ringObj.mat.setVector2("uWorldCenter", new BABYLON.Vector2(worldX, worldY));
+
+        const camX = Number(camera.pos.sectorX * BigInt(SECTOR_SIZE_M)) + camera.pos.offsetX;
+        const camY = Number(camera.pos.sectorY * BigInt(SECTOR_SIZE_M)) + camera.pos.offsetY;
+        ringObj.mat.setVector2("uCameraWorldPos", new BABYLON.Vector2(camX, camY));
+        
+        // In Babylon.js ShaderMaterial doesn't have setBoolean, use setInt
+        const isField = minRadius < 1000 ? 1 : 0;
+        ringObj.mat.setInt("uIsField", isField); 
+        
+        this.activeAsteroidRings.push(ringObj);
+        return;
     }
 
-    if (screenMax < 1.0) return;
-
-    const midRadius = (screenMin + screenMax) / 2;
-    const thickness = Math.max(1.0, screenMax - screenMin);
-
-    // Draw using simple alpha line
-    this.graphics.circle(screen.x, screen.y, midRadius);
-    // Draw dashed-like stroke if zoomed in enough, else solid alpha
-    if (thickness > 2) {
-      this.graphics.stroke({ color: 0xaa8866, width: thickness, alpha: 0.2 });
-    } else {
-      this.graphics.stroke({ color: 0xaa8866, width: Math.max(1, thickness), alpha: 0.1 });
-    }
+    // Standard high-performance vector orbits for single-lines
+    this.graphics.circle(screen.x, screen.y, rMax);
+    let alpha = Math.min(0.3, rMax / 400);
+    this.graphics.stroke({ color: 0x4466aa, width: 1, alpha: Math.max(0.01, alpha) });
   }
 
   public drawSpaceStation(coords: GlobalCoords, camera: Camera, width: number, height: number, color: string) {
@@ -263,6 +493,7 @@ export class WorldRenderer extends BaseRenderer {
 
     const colorNum = this.colorToNumber(color);
     
+    this.graphics.beginPath();
     this.graphics.moveTo(screen.x, screen.y - renderSize);
     this.graphics.lineTo(screen.x + renderSize, screen.y);
     this.graphics.lineTo(screen.x, screen.y + renderSize);
@@ -330,6 +561,7 @@ export class WorldRenderer extends BaseRenderer {
     } else {
       const rng = this.createStaticRNG(asteroid.id);
       const sides = 5 + Math.floor(rng() * 5);
+      this.graphics.beginPath();
       this.graphics.moveTo(screen.x + screenRadius, screen.y);
       for (let i = 1; i <= sides; i++) {
         const angle = (i / sides) * Math.PI * 2;
@@ -339,123 +571,22 @@ export class WorldRenderer extends BaseRenderer {
       this.graphics.closePath();
       this.graphics.fill({ color: colorNum });
       
-      if (screenRadius > 5) {
-        this.graphics.circle(screen.x + screenRadius * 0.3, screen.y - screenRadius * 0.3, screenRadius * 0.2);
-        this.graphics.fill({ color: 0x000000, alpha: 0.2 });
+      // Draw details like craters or highlights
+      if (screenRadius > 3) {
+        const rng2 = this.createStaticRNG(asteroid.id + "_detail");
+        const craterCount = Math.floor(1 + rng2() * 3);
+        for(let j=0; j<craterCount; j++) {
+           const cx_rel = (rng2() - 0.5) * 1.2;
+           const cy_rel = (rng2() - 0.5) * 1.2;
+           const cr = screenRadius * (0.1 + rng2() * 0.2);
+           this.graphics.circle(screen.x + cx_rel * screenRadius, screen.y + cy_rel * screenRadius, cr);
+           this.graphics.fill({ color: 0x000000, alpha: 0.15 });
+        }
+        // Subtle highlight
+        this.graphics.circle(screen.x - screenRadius * 0.3, screen.y - screenRadius * 0.3, screenRadius * 0.2);
+        this.graphics.fill({ color: 0xffffff, alpha: 0.1 });
       }
     }
-  }
-
-  public drawAsteroidCluster(cluster: any, camera: Camera, width: number, height: number, isFaint: boolean = false) {
-    // Re-implemented to draw Hexagonal Chunk Territory
-    // cluster here is actually a HexChunk object passed from renderUtils
-    const cx = cluster.cx || 0; 
-    const cy = cluster.cy || 0;
-    
-    // Coarse chunks represent a large area - render as soft technical blobs for better performance
-    if (cluster.isCoarse) {
-        const s = cluster.size || (1_000_000 * 10);
-        const coords = { sectorX: 0n, sectorY: 0n, offsetX: cx, offsetY: cy };
-        camera.normalize(coords);
-        const screen = camera.worldToScreen(coords, width, height);
-        const size = s * camera.zoom;
-        
-        if (size < 1) return;
-        
-        // Solid fast circle for coarse view - grey and more transparent per user request
-        this.graphics.circle(screen.x, screen.y, size * 0.5);
-        this.graphics.fill({ color: 0x444444, alpha: 0.1 });
-        return;
-    }
-
-    // High fidelity Hexagonal Territory rendering
-    const s = ASTEROID_CHUNK_SIZE + 20;
-    const points = [];
-    for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 180) * (60 * i - 30);
-        const px = cx + s * Math.cos(angle);
-        const py = cy + s * Math.sin(angle);
-        const coords = { sectorX: 0n, sectorY: 0n, offsetX: px, offsetY: py };
-        camera.normalize(coords);
-        points.push(camera.worldToScreen(coords, width, height));
-    }
-
-    // Draw the main area
-    this.graphics.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) this.graphics.lineTo(points[i].x, points[i].y);
-    this.graphics.closePath();
-    
-    // Fill with a subtle technological pattern (blue-grey and more transparent)
-    const fillAlpha = isFaint ? 0.05 : 0.12;
-    this.graphics.fill({ color: 0x224466, alpha: fillAlpha });
-    
-    // No technical outline per user request - removing stroke logic
-  }
-
-  private noiseCanvas: HTMLCanvasElement | null = null;
-  private noiseCtx: CanvasRenderingContext2D | null = null;
-
-  public updateAsteroidNoiseMap(buffer: Uint8Array, width: number, height: number) {
-    if (isNaN(width) || isNaN(height) || width <= 0 || height <= 0 || !isFinite(width) || !isFinite(height)) return;
-    if (!this.noiseCanvas) {
-        this.noiseCanvas = document.createElement('canvas');
-        this.noiseCanvas.width = width;
-        this.noiseCanvas.height = height;
-        this.noiseCtx = this.noiseCanvas.getContext('2d');
-        if (!this.noiseCtx || !this.scene) return;
-        
-        this.noiseTex = new BABYLON.DynamicTexture("noiseTex", {width, height}, this.scene, false);
-        if (this.noiseMat) {
-           this.noiseMat.diffuseTexture = this.noiseTex;
-           this.noiseMat.emissiveTexture = this.noiseTex;
-        }
-    }
-
-    if (this.noiseCanvas.width !== width || this.noiseCanvas.height !== height) {
-        this.noiseCanvas.width = width;
-        this.noiseCanvas.height = height;
-        if (this.noiseTex) this.noiseTex.dispose();
-        if (this.scene) {
-            this.noiseTex = new BABYLON.DynamicTexture("noiseTex", {width, height}, this.scene, false);
-            if (this.noiseMat) {
-                this.noiseMat.diffuseTexture = this.noiseTex;
-                this.noiseMat.emissiveTexture = this.noiseTex;
-            }
-        }
-    }
-
-    const imgData = new ImageData(Math.max(1, width), Math.max(1, height));
-    imgData.data.set(new Uint8ClampedArray(buffer));
-    this.noiseCtx!.putImageData(imgData, 0, 0);
-    
-    if (this.noiseTex) {
-        this.noiseTex.update();
-    }
-  }
-
-  public drawAsteroidNoiseMap(camera: Camera, width: number, height: number, minX: number, minY: number, maxX: number, maxY: number) {
-    if (!this.noiseMesh || isNaN(width) || isNaN(height) || isNaN(minX) || isNaN(minY)) return;
-
-    const midX = (minX + maxX) / 2;
-    const midY = (minY + maxY) / 2;
-    
-    const center = { sectorX: 0n, sectorY: 0n, offsetX: midX, offsetY: midY };
-    camera.normalize(center);
-
-    const screenCenter = camera.worldToScreen(center, width, height);
-
-    this.noiseMesh.position.x = screenCenter.x;
-    this.noiseMesh.position.y = -screenCenter.y;
-    this.noiseMesh.position.z = 1.0; // Render behind 2D stuff
-    this.noiseMesh.scaling.x = (maxX - minX) * camera.zoom;
-    this.noiseMesh.scaling.y = -(maxY - minY) * camera.zoom;
-    this.noiseMesh.rotation.z = camera.angle;
-    
-    const visualAlpha = Math.max(0.3, 1 - camera.zoom * 1.5);
-    if (this.noiseMat) {
-       this.noiseMat.alpha = visualAlpha;
-    }
-    this.noiseMesh.isVisible = visualAlpha > 0.05;
   }
 
   private drawTacticalMarker(x: number, y: number, colorNum: number, size: number) {
@@ -481,6 +612,7 @@ export class WorldRenderer extends BaseRenderer {
     } else {
       const segments = 128;
       const step = (Math.PI * 2) / segments;
+      this.graphics.beginPath();
       this.graphics.moveTo(x + radius, y);
       for (let i = 1; i <= segments; i++) {
         this.graphics.lineTo(x + Math.cos(i * step) * radius, y + Math.sin(i * step) * radius);
@@ -538,5 +670,38 @@ export class WorldRenderer extends BaseRenderer {
       this.graphics.lineTo(rotX2 * zoom + width / 2, rotY2 * zoom + height / 2);
     }
     this.graphics.stroke({ color, width: 1 });
+  }
+
+  public setApp(app: any) {
+     // No-op for Babylon
+  }
+
+  private initNoiseMap(scene: BABYLON.Scene) {
+     // Removed
+  }
+
+  private colorToNumber(color: string): number {
+    if (color.startsWith('#')) {
+      return parseInt(color.slice(1), 16);
+    }
+    if (color.startsWith('rgb')) {
+      const matches = color.match(/\d+/g);
+      if (matches && matches.length >= 3) {
+        return (parseInt(matches[0]) << 16) | (parseInt(matches[1]) << 8) | parseInt(matches[2]);
+      }
+    }
+    return 0xcccccc;
+  }
+
+  private createStaticRNG(id: string) {
+    let seed = 0;
+    for (let i = 0; i < id.length; i++) {
+      seed = ((seed << 5) - seed) + id.charCodeAt(i);
+      seed |= 0;
+    }
+    return () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    };
   }
 }

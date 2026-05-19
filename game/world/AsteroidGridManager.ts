@@ -18,9 +18,6 @@ export class AsteroidGridManager {
   
   private worker: Worker | null = null;
   
-  public isRequestingNoiseMap = false;
-  public latestNoiseMap: any = null;
-
   constructor(noiseFn: (x: number, y: number) => number) {
     this.noise = noiseFn;
     if (typeof window !== 'undefined') {
@@ -43,52 +40,17 @@ export class AsteroidGridManager {
     this.worldGenerator = wg;
   }
 
-  public requestNoiseMap(minX: number, minY: number, maxX: number, maxY: number, width: number, height: number, worldInfo: { currentSystem: StarSystem | null, playerPos: {x: number, y: number} }) {
-      if (!this.worker || this.isRequestingNoiseMap || isNaN(width) || isNaN(height) || width <= 0 || height <= 0 || !isFinite(width) || !isFinite(height)) return;
-      this.isRequestingNoiseMap = true;
-      
-      let nearbySystems: any[] = [];
-      if (this.worldGenerator) {
-          const secSize = Number(SECTOR_SIZE_M);
-          // Get systems in the bounding box of the noise map + a small margin
-          const secMinX = BigInt(Math.floor(minX / secSize));
-          const secMinY = BigInt(Math.floor(minY / secSize));
-          const secMaxX = BigInt(Math.ceil(maxX / secSize));
-          const secMaxY = BigInt(Math.ceil(maxY / secSize));
-          // We can afford 2 sectors margin to safely capture neighboring stars influencing this area
-          const rawSystems = this.worldGenerator.getSystemsInViewport(secMinX - 2n, secMinY - 2n, secMaxX + 2n, secMaxY + 2n);
-          nearbySystems = rawSystems.map(s => ({
-              id: s.id,
-              cx: Number(s.sectorX) * secSize + s.offsetX,
-              cy: Number(s.sectorY) * secSize + s.offsetY,
-              starRadius: s.starRadius,
-              asteroidBelts: s.asteroidBelts
-          }));
-      }
-
-      this.worker.postMessage({
-          type: 'GENERATE_NOISE_MAP', id: 'NOISE_MAP',
-          payload: { 
-              minX, minY, maxX, maxY, width, height, 
-              currentSystemData: worldInfo.currentSystem, 
-              nearbySystems,
-              playerPos: worldInfo.playerPos
-          }
-      });
-  }
-
   private handleWorkerMessage(e: MessageEvent) {
       const { type, id, payload } = e.data;
-      if (type === 'NOISE_MAP_DONE') {
-          this.isRequestingNoiseMap = false;
-          // Set needsUpload so the render loop knows it's fresh data to upload to GPU
-          this.latestNoiseMap = { ...payload, needsUpload: true };
-      } else if (type === 'CHUNK_DONE') {
+      if (type === 'CHUNK_DONE') {
           const chunk = this.loadedChunks.get(id);
           this.pendingChunks.delete(id);
           if (chunk) {
               const asteroids = payload.asteroids || [];
               chunk.asteroids = asteroids;
+              
+              // Invalidate cache since we have new data
+              this.cachedVisibleAsteroids = [];
               
               // Calculate stats for visualization (Minecraft-style biome/richness mapping)
               chunk.avgCount = asteroids.length;
@@ -133,43 +95,60 @@ export class AsteroidGridManager {
     
     if (controllingSystem) {
       const sys = controllingSystem;
-      const sx = Number(sys.sectorX) * Number(SECTOR_SIZE_M) + sys.offsetX;
-      const sy = Number(sys.sectorY) * Number(SECTOR_SIZE_M) + sys.offsetY;
+      const secSizeBI = BigInt(SECTOR_SIZE_M);
+      const sxBI = sys.sectorX * secSizeBI + BigInt(Math.floor(sys.offsetX));
+      const syBI = sys.sectorY * secSizeBI + BigInt(Math.floor(sys.offsetY));
       
-      const dx = cx - sx;
-      const dy = cy - sy;
+      const dx = cx - Number(sxBI);
+      const dy = cy - Number(syBI);
       const distSq = dx*dx + dy*dy;
       const systemLimitSq = 1.40625e27; // (3.75e13)^2, approx 250 AU
 
       if (distSq < systemLimitSq) {
         const distToStar = Math.sqrt(distSq);
-        if (distToStar >= sys.starRadius * 4 && sys.asteroidBelts) {
-          for (const belt of sys.asteroidBelts) {
-            const margin = 500_000;
-            if (distToStar > belt.minRadius - margin && distToStar < belt.maxRadius + margin) {
-               if (baseNoise >= belt.threshold) {
-                 isAsteroidField = true;
-                 break;
-               }
+        const starRad = sys.starRadius || 700000;
+        if (distToStar >= starRad * 4.0) {
+          if (sys.asteroidBelts) {
+            for (const belt of sys.asteroidBelts) {
+              const margin = 1000000; // 1000km margin
+              if (distToStar > belt.minRadius - margin && distToStar < belt.maxRadius + margin) {
+                 if (baseNoise >= belt.threshold * 0.9) { // Slightly more lenient threshold
+                   isAsteroidField = true;
+                   break;
+                 }
+              }
+            }
+          }
+          if (!isAsteroidField && sys.asteroidClusters) {
+            for (const cluster of sys.asteroidClusters) {
+              const cX = Math.cos(cluster.orbitAngle) * cluster.orbitRadius;
+              const cY = Math.sin(cluster.orbitAngle) * cluster.orbitRadius;
+              const distToCluster = Math.hypot(dx - cX, dy - cY);
+              if (distToCluster < cluster.radius * 1.5) { // Braoder clusters
+                if (baseNoise >= (1.0 - cluster.density * 0.6)) {
+                  isAsteroidField = true;
+                  break;
+                }
+              }
             }
           }
         }
-        // CRITICAL: Inside star system radius, we never use deep space noise.
-        // Return with the result of the belt check.
         return { isAsteroidField, gridType: 'SYSTEM', parentId: `sys-${sys.id}` };
       } else {
         const deepNoise = (this.noise(cx * 4e-11, cy * 4e-11) + 1) / 2;
-        // Adjusted to match worker thresholds (allowing slightly faint edges to actually spawn asteroids)
-        if (deepNoise > 0.55 && baseNoise >= 0.35) isAsteroidField = true;
+        if (deepNoise > 0.42 && baseNoise >= 0.3) { // Significantly lower thresholds for deep clusters
+          isAsteroidField = true;
+        }
+        gridType = 'GLOBAL';
+        parentId = 'GLOBAL';
       }
     } else {
       const deepNoise = (this.noise(cx * 4e-11, cy * 4e-11) + 1) / 2;
-      if (deepNoise > 0.55 && baseNoise >= 0.35) isAsteroidField = true;
-    }
-
-    if (controllingSystem) {
-      gridType = 'SYSTEM';
-      parentId = `sys-${controllingSystem.id}`;
+      if (deepNoise > 0.42 && baseNoise >= 0.3) {
+        isAsteroidField = true;
+      }
+      gridType = 'GLOBAL';
+      parentId = 'GLOBAL';
     }
 
     return { isAsteroidField, gridType, parentId };
@@ -197,11 +176,7 @@ export class AsteroidGridManager {
     this.lastUpdateWorldY = worldY;
     this.lastUpdateZoom = zoom;
 
-    let radius = 1;
-    if (zoom < 0.2) radius = 2;
-    if (zoom < 0.05) radius = 4;
-    if (zoom < 0.01) radius = 8;
-    if (zoom < 0.002) radius = 12;
+    let radius = 2; // Fixed radius for performance
 
     // Convert player position to axial coords using safe BigInt math before converting to small Numbers
     const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
@@ -305,7 +280,7 @@ export class AsteroidGridManager {
         const secSizeBI = BigInt(SECTOR_SIZE_M);
         const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
         
-        const worldXBI = BigInt(chunk.q + chunk.r/2) * chunkSizeBI * BigInt(173205) / 100000n + BigInt(Math.floor(dx));
+        const worldXBI = (BigInt(chunk.q * 2 + chunk.r) * chunkSizeBI * 173205n / 200000n) + BigInt(Math.floor(dx));
         const worldYBI = BigInt(chunk.r) * chunkSizeBI * 3n / 2n + BigInt(Math.floor(dy));
         
         const secX = worldXBI / secSizeBI;

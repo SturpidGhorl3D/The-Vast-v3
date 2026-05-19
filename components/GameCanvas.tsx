@@ -529,17 +529,29 @@ export default function GameCanvas({
         // Let and random updates
         if (!engine.isPaused && engine.player !== null) {
           engine.update(time);
+
+          // Update simple primitives directly (React will ignore if unchanged)
           setIsGravityWellActive(engine.currentGravityWell !== null);
           setFollowTarget(engine.followTarget);
           setOrbitTarget(engine.orbitTarget);
-          setResearchedTechs([...engine.researchedTechs]);
           setInnovationPoints(engine.innovationPoints);
-          if (engine.activeResearch) {
-             setActiveResearch({ ...engine.activeResearch });
-          } else {
-             setActiveResearch(null);
-          }
-          setAvailableTechOptions([...engine.availableTechOptions]);
+
+          // Only update complex objects/arrays if they actually changed to avoid massive re-renders
+          setResearchedTechs(prev => prev.length !== engine.researchedTechs.length ? [...engine.researchedTechs] : prev);
+          
+          setActiveResearch(prev => {
+              if (!prev && !engine.activeResearch) return prev;
+              if ((!prev && engine.activeResearch) || (prev && !engine.activeResearch)) {
+                  return engine.activeResearch ? { ...engine.activeResearch } : null;
+              }
+              if (prev && engine.activeResearch && (prev.techId !== engine.activeResearch.techId || prev.progress !== engine.activeResearch.progress)) {
+                  return { ...engine.activeResearch };
+              }
+              return prev;
+          });
+
+          setAvailableTechOptions(prev => prev.length !== engine.availableTechOptions.length ? [...engine.availableTechOptions] : prev);
+          
           if (Math.random() < 0.1) {
              const ecs = engine.ecs as ECS;
              const inv = ecs.getComponent<any>(engine.player, 'Inventory')!;

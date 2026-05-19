@@ -69,8 +69,8 @@ export const renderWorldObjects = (
               const starWithPos = { ...system, ...star, offsetX: system.offsetX + localPos.x, offsetY: system.offsetY + localPos.y, starRadius: star.radius, starColor: star.color };
               renderer.drawStar(starWithPos, camera, false, now);
 
-              // FIXME: эти линии орбит чуток смещены относительно центра тел что на них крутятся
-              if (curMode === 'TACTICAL' && star.orbitRadius && star.orbitRadius > 0) {
+              // Orbit and ring lines
+              if (star.orbitRadius && star.orbitRadius > 0) {
                  const parentPos = engine.celestial.getCelestialLocalPos({ orbitCenterId: star.orbitCenterId, id: 'virtual_parent_star' }, engine.currentTime);
                  const centerCoords = { sectorX: system.sectorX, sectorY: system.sectorY, offsetX: system.offsetX + parentPos.x, offsetY: system.offsetY + parentPos.y };
                  renderer.drawAsteroidRing(centerCoords, star.orbitRadius, star.orbitRadius, camera, now);
@@ -94,12 +94,24 @@ export const renderWorldObjects = (
          };
          renderer.drawAsteroidRing(centerCoords, belt.minRadius, belt.maxRadius, camera, now);
          
-         // FIXME: эти линии орбит чуток смещены относительно центра тел что на них крутятся
-         if (curMode === 'TACTICAL') {
-             // Optional: middle hint line or bounding rings
-             renderer.drawAsteroidRing(centerCoords, belt.minRadius, belt.minRadius, camera, now);
-             renderer.drawAsteroidRing(centerCoords, belt.maxRadius, belt.maxRadius, camera, now);
-         }
+          // Visual boundary rings for belts
+          renderer.drawAsteroidRing(centerCoords, belt.minRadius, belt.minRadius, camera, now);
+          renderer.drawAsteroidRing(centerCoords, belt.maxRadius, belt.maxRadius, camera, now);
+      });
+
+      // Asteroid Clusters
+      system.asteroidClusters?.forEach((cluster: any) => {
+         const angle = cluster.orbitAngle || 0;
+         const r = cluster.orbitRadius || 0;
+         const clusterX = Math.cos(angle) * r;
+         const clusterY = Math.sin(angle) * r;
+         const centerCoords = {
+             sectorX: system.sectorX,
+             sectorY: system.sectorY,
+             offsetX: system.offsetX + clusterX,
+             offsetY: system.offsetY + clusterY
+         };
+         renderer.drawAsteroidRing(centerCoords, 0, cluster.radius, camera, now);
       });
       
       // Planets
@@ -117,10 +129,19 @@ export const renderWorldObjects = (
         // Draw Planet itself
         renderer.drawPlanet(planetWithPos, camera, now, { x: -localPos.x, y: -localPos.y });
         
-        // FIXME: эти линии орбит чуток смещены относительно центра тел что на них крутятся
-        if (curMode === 'TACTICAL' && p.orbitRadius && p.orbitRadius > 0) {
-           const parentPos = engine.celestial.getCelestialLocalPos({ orbitCenterId: p.orbitCenterId, id: 'virtual_parent_planet' }, engine.currentTime);
-           const centerCoords = { sectorX: system.sectorX, sectorY: system.sectorY, offsetX: system.offsetX + parentPos.x, offsetY: system.offsetY + parentPos.y };
+        // Draw planetary rings if any
+        if (p.ring) {
+          renderer.drawAsteroidRing(planetWithPos, p.ring.innerRadius, p.ring.outerRadius, camera, now);
+        }
+        
+        if (p.orbitRadius && p.orbitRadius > 0) {
+           let cx = system.offsetX, cy = system.offsetY;
+           const parentArr = system.stars?.find((s: any) => s.id === p.orbitCenterId) || system.stars?.[0];
+           if (parentArr) {
+               const pPos = engine.celestial.getCelestialLocalPos(parentArr, engine.currentTime);
+               cx += pPos.x; cy += pPos.y;
+           }
+           const centerCoords = { sectorX: system.sectorX, sectorY: system.sectorY, offsetX: cx, offsetY: cy };
            renderer.drawAsteroidRing(centerCoords, p.orbitRadius, p.orbitRadius, camera, now);
         }
 
@@ -138,8 +159,7 @@ export const renderWorldObjects = (
             
             renderer.drawPlanet(satWithPos, camera, now, { x: -satLocalPos.x, y: -satLocalPos.y });
             
-            // FIXME: эти линии орбит чуток смещены относительно центра тел что на них крутятся
-            if (curMode === 'TACTICAL' && sat.orbitRadius && sat.orbitRadius > 0) {
+            if (sat.orbitRadius && sat.orbitRadius > 0) {
                const centerCoords = planetWithPos; // satellite orbits planet
                renderer.drawAsteroidRing(centerCoords, sat.orbitRadius, sat.orbitRadius, camera, now);
             }
@@ -159,24 +179,21 @@ export const renderWorldObjects = (
         const factionColor = globalFactionManager.getFaction(st.factionId)?.color || '#aa88ff';
         renderer.drawSpaceStation(centerCoords, camera, renderer.width, renderer.height, factionColor);
 
-        if (curMode === 'TACTICAL' && st.orbitRadius && st.orbitRadius > 0) {
-           const parentPos = engine.celestial.getCelestialLocalPos({ orbitCenterId: st.orbitTarget || st.orbitCenterId, id: 'virtual_parent_station' }, engine.currentTime);
-           const parentCoords = { sectorX: system.sectorX, sectorY: system.sectorY, offsetX: system.offsetX + parentPos.x, offsetY: system.offsetY + parentPos.y };
-           // FIXME: эти линии орбит чуток смещены относительно центра тел что на них крутятся
+        if (st.orbitRadius && st.orbitRadius > 0) {
+           let cx = system.offsetX, cy = system.offsetY;
+           const targetId = st.orbitTarget || st.orbitCenterId;
+           const pObj = system.planets?.find((p: any) => p.id === targetId) ||
+                        system.stars?.find((s: any) => s.id === targetId) ||
+                        system.planets?.flatMap((p: any) => p.satellites || []).find((s: any) => s.id === targetId);
+           if (pObj) {
+               const pPos = engine.celestial.getCelestialLocalPos(pObj, engine.currentTime);
+               cx += pPos.x; cy += pPos.y;
+           }
+           const parentCoords = { sectorX: system.sectorX, sectorY: system.sectorY, offsetX: cx, offsetY: cy };
            renderer.drawAsteroidRing(parentCoords, st.orbitRadius, st.orbitRadius, camera, now);
         }
       });
     }
-  }
-
-  // --- ASTEROID FIELD VISUALIZATION (Old style "Fog" based on Chunks) ---
-  if (showFields) {
-      engine.asteroidGrid.loadedChunks.forEach((chunk: any) => {
-          if (chunk.isAsteroidField) {
-              const isFaint = curMode === 'STRATEGIC';
-              renderer.drawAsteroidCluster(chunk, camera, renderer.width, renderer.height, isFaint);
-          }
-      });
   }
 
   // High performance limit: only render individual sprites when zoomed in enough 
@@ -203,6 +220,23 @@ export const renderWorldObjects = (
     }
 
     renderer.updateAsteroidInstances(visibleAsteroids, camera, now, engine.targetAsteroidId, engine.miningTargetId);
+
+    // ── Deep Space Asteroid Field Prediction ──
+    if (showFields && (curMode === 'LOCAL' || curMode === 'TACTICAL')) {
+        const activeChunks = engine.asteroidGrid.getActiveChunks();
+        for (const chunk of activeChunks) {
+            const secSize = Number(SECTOR_SIZE_M);
+            const centerCoords: GlobalCoords = { 
+                sectorX: BigInt(Math.floor(chunk.cx / secSize)),
+                sectorY: BigInt(Math.floor(chunk.cy / secSize)),
+                offsetX: chunk.cx % secSize,
+                offsetY: chunk.cy % secSize
+            };
+            camera.normalize(centerCoords);
+            // Hex chunks are approx 2M wide, we draw a 1.2M diameter haze
+            renderer.drawAsteroidRing(centerCoords, 0, ASTEROID_CHUNK_SIZE * 0.6, camera, now);
+        }
+    }
 
     // 2. Draw targeting frames on top of everything
     visibleAsteroids.forEach((ast: any) => {

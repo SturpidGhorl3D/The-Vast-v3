@@ -50,6 +50,27 @@ export const EditorMenuOverlay: React.FC<EditorMenuOverlayProps> = ({
               </div>
             )}
             {!isCreative && <button className={`w-full ${px} bg-green-500/20 hover:bg-green-500/40 border border-green-500/50`} onClick={applyChanges}>Apply Changes</button>}
+            {isCreative && (
+              <button 
+                className={`w-full ${px} bg-purple-500/20 hover:bg-purple-500/40 border border-purple-500/50`} 
+                onClick={() => {
+                  import('@/game/systems/proceduralShipGenerator').then(m => {
+                    import('@/components/game/speciesTypes').then(sp => {
+                       const styles: any[] = ['ORGANIC', 'CRYSTALLID', 'INDUSTRIAL', 'BRUTALIST', 'BIOMECHANICAL'];
+                       const randomStyle = styles[Math.floor(Math.random() * styles.length)];
+                       const randomSeed = Math.floor(Math.random() * 1000000);
+                       const newHull = m.generateProceduralHull('player', randomStyle, randomSeed);
+                       setShipHull(newHull);
+                       if(engine) engine.setDraftHull(newHull);
+                       setActiveDeck(newHull.activeDeckIndex || 0);
+                       setIsEditorMenuOpen(false);
+                    });
+                  });
+                }}
+              >
+                *DEBUG* Generate Random Ship
+              </button>
+            )}
             <button className={`w-full ${px} bg-blue-500/20 hover:bg-blue-500/40 border border-blue-500/50`} onClick={() => setShowBlueprints(true)}>Load/Save Schematics</button>
             <button className={`w-full ${px} bg-white/5 hover:bg-white/10 border border-white/20`} onClick={cancelEditor}>{isCreative ? 'Exit Creative Editor' : 'Exit Without Saving'}</button>
             <button className={`w-full ${px} bg-red-500/20 hover:bg-red-500/40 border border-red-500/50`} onClick={() => setIsEditorMenuOpen(false)}>Close Menu</button>

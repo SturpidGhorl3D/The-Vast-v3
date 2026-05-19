@@ -51,7 +51,7 @@ export const DiplomacyWindow: React.FC<DiplomacyWindowProps> = ({
             </div>
             <div className="text-[8px] md:text-[10px] uppercase text-purple-400/60 tracking-wider flex items-center gap-2 mt-0.5">
               <span className="w-1 md:w-1.5 h-1 md:h-1.5 bg-green-500 rounded-full animate-pulse"></span>
-              <span className="truncate">Канал связи: {contactId.toString(16).padEnd(8, '4').slice(0, 8).toUpperCase()}</span>
+              <span className="truncate">Канал связи: {String(faction.id || '0').replace(/[^a-zA-Z0-9]/g, '').padEnd(8, '4').slice(0, 8).toUpperCase()}</span>
             </div>
           </div>
         </div>
