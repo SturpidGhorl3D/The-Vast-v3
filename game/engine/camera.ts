@@ -126,9 +126,8 @@ export class Camera {
     };
   }
 
-  // For PixiJS, we often want coordinates relative to camera in world units, 
-  // then Pixi handles the rest (or we handle it in a container)
-  getPixiCoords(target: GlobalCoords): { x: number; y: number } {
+  // For WebGL / Babylon, we can just use getRelativePos
+  getEngineCoords(target: GlobalCoords): { x: number; y: number } {
     return this.getRelativePos(target);
   }
 }

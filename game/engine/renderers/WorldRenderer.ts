@@ -117,19 +117,19 @@ export class WorldRenderer extends BaseRenderer {
                   // Compute radius in world space for perfect stability against noise
                   vec2 relPos = worldPos - uWorldCenter;
                   float radiusMeters = length(relPos);
-                  float screenR = radiusMeters * uZoom;
+                  float screenRadWorld = radiusMeters * uZoom;
                   
                   float alpha = 0.0;
                   float n = 0.0;
                   
                   if (uIsField == 1) {
                       // Generic field: World-stable noise
-                      vec3 noisePos = vec3(worldPos * 0.00001, uTime * 0.02);
+                      vec3 noisePos = vec3(worldPos * 0.000005, uTime * 0.002);
                       n = sampleNoise(noisePos) * 0.6 + sampleNoise(noisePos * 4.3) * 0.4;
                       
-                      float edgeFade = smoothstep(uMaxRadius, uMaxRadius * 0.8, screenR);
+                      float edgeFade = smoothstep(uMaxRadius, uMaxRadius * 0.8, screenRadWorld);
                       if (uMinRadius > 1.0) {
-                          edgeFade *= smoothstep(uMinRadius, uMinRadius * 1.2, screenR);
+                          edgeFade *= smoothstep(uMinRadius, uMinRadius * 1.2, screenRadWorld);
                       }
                       
                       alpha = smoothstep(0.65, 0.75, n) * edgeFade * uDensity * 0.8;
@@ -147,7 +147,7 @@ export class WorldRenderer extends BaseRenderer {
                           n = 0.5;
                           alpha = pow(edgeFade, 1.2) * uDensity * 0.5;
                       } else {
-                          vec3 noisePos = vec3(cos(angle) * 8.0, sin(angle) * 8.0, radiusMeters * 0.000005 + uTime * 0.04);
+                          vec3 noisePos = vec3(cos(angle) * 8.0, sin(angle) * 8.0, radiusMeters * 0.000005 + uTime * 0.005);
                           n = sampleNoise(noisePos * 0.5) * 0.6 + sampleNoise(noisePos * 3.0) * 0.4;
                           alpha = smoothstep(0.6, 0.8, n) * pow(edgeFade, 1.4) * uDensity;
                       }
@@ -632,7 +632,7 @@ export class WorldRenderer extends BaseRenderer {
     const diag = Math.hypot(width, height) / zoom;
     
     // Safety check: if we are trying to draw more than 2000 lines, it will most likely
-    // cause performance issues or "Invalid array length" error in PIXI buffers.
+    // cause performance issues or trigger buffer size limits in WebGL / Babylon buffers.
     if (diag / spacing > 2000) return;
 
     const startX = Math.floor(-diag / 2 / spacing) * spacing;

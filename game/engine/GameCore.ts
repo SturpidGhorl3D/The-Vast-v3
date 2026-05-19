@@ -4,7 +4,7 @@
  * 
  * Provides an isolated, renderer-agnostic core for the game simulation.
  * This handles ECS, World, and System updates.
- * It does NOT contain any DOM, Canvas, or Graphics (PIXI) logic.
+ * It does NOT contain any DOM, Canvas, or Graphics (Babylon/WebGL) logic.
  * 
  * FOR OTHER AI: 
  * - Do not add rendering or browser-specific dependencies here.

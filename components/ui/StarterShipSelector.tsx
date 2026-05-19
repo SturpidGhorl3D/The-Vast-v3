@@ -51,25 +51,8 @@ export default function StarterShipSelector({ onSelect, onCancel }: StarterShipS
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
           <div>
             <h2 className="text-xl font-bold text-blue-400">ВЫБОР СТАРТОВОГО КОРАБЛЯ</h2>
-            <div className="text-xs text-blue-200/50 mt-1 uppercase tracking-widest">Этап 2: Выбор чертежа</div>
           </div>
           <button onClick={onCancel} className="text-white/40 hover:text-white">✕</button>
-        </div>
-
-        <div className="px-4 pt-4">
-          <div className="border border-white/10 bg-white/5 p-3 rounded flex items-center space-x-3 mb-2 opacity-50 select-none">
-             <div className="text-2xl">👤</div>
-             <div className="flex-1">
-                 <div className="text-xs text-blue-300 font-bold uppercase">ВЫБОР ПРОИСХОЖДЕНИЯ (В разработке)</div>
-                 <div className="text-[10px] text-white/50">В будущем вы сможете выбрать предысторию персонажа, которая определит стартовые отношения с фракциями, технологии и капитал. Сейчас доступно только происхождение &quot;Независимый капитан&quot;.</div>
-             </div>
-             <select disabled className="bg-black border border-white/20 text-xs px-2 py-1 text-white/50 rounded">
-                 <option>Независимый капитан</option>
-                 <option>Ветеран Федерации</option>
-                 <option>Изгнанник Корсаров</option>
-                 <option>Торговый магнат</option>
-             </select>
-          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
