@@ -188,11 +188,11 @@ export class StarSystemGenerator {
       currentOrbit += orbitSeparation;
 
       if (isBeltOrbit) {
-          const width = 2 * AU_M + rng() * 10 * AU_M;
+          const width = 0.25 * AU_M + rng() * 1.25 * AU_M;
           const threshold = 0.35 + rng() * 0.15; // Provide explicit threshold for AsteroidGridManager
           asteroidBelts.push({
               id: `${id}-belt-${i}`,
-              minRadius: currentOrbit - width / 2,
+              minRadius: Math.max(maxStarRadius * 2.0, currentOrbit - width / 2),
               maxRadius: currentOrbit + width / 2,
               threshold: threshold,
               orbitCenterId: starCount > 1 ? 'barycenter' : `${id}-star-0`
@@ -411,6 +411,10 @@ export class StarSystemGenerator {
         const clusterRadius = ASTEROID_CLUSTER_RADIUS_MIN_M + rng() * (ASTEROID_CLUSTER_RADIUS_MAX_M - ASTEROID_CLUSTER_RADIUS_MIN_M);
         asteroidClusters.push({
             id: `${id}-cluster-${i}`,
+            sectorX,
+            sectorY,
+            offsetX,
+            offsetY,
             orbitRadius: clusterOrbit,
             orbitAngle: rng() * Math.PI * 2,
             radius: clusterRadius,

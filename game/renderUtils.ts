@@ -197,45 +197,46 @@ export const renderWorldObjects = (
   }
 
   // High performance limit: only render individual sprites when zoomed in enough 
-  // to actually distinguish them (zoom > 0.005)
-  if ((curMode === 'LOCAL' || curMode === 'TACTICAL') && camera.zoom > 0.005) {
+  // to actually distinguish them (zoom > 0.005 in LOCAL, much lower in TACTICAL)
+  const renderThreshold = curMode === 'TACTICAL' ? 1e-12 : 0.005;
+  if ((curMode === 'LOCAL' || curMode === 'TACTICAL') && camera.zoom > renderThreshold) {
     const r = renderer;
     const viewW = r.width / camera.zoom;
     const viewH = r.height / camera.zoom;
     // Tighter boundary for visible asteroids to reduce CPU iteration count
     const boundMult = curMode === 'TACTICAL' ? 1.1 : 1.3;
-    let visibleAsteroids = engine.asteroidGrid.getVisibleAsteroids(
-      wx - viewW * boundMult, wy - viewH * boundMult, 
-      wx + viewW * boundMult, wy + viewH * boundMult
-    );
     
-    // 1. Draw all asteroids first
+    let minRadius = 0;
     if (curMode === 'TACTICAL') {
-       visibleAsteroids = visibleAsteroids.filter((ast: any) => {
-         const isMiningTarget = ast.id === engine.miningTargetId;
-         const isTargeting = ast.id === engine.targetAsteroidId;
-         // In tactical, only show medium/large asteroids if scanned, plus targets
-         return (now - engine.lastAsteroidScan < 10000 && ast.radius > 800) || isTargeting || isMiningTarget;
-       });
+      // In tactical, only show medium/large asteroids if scanned, plus targets
+      if (now - engine.lastAsteroidScan < 10000) {
+          minRadius = 800;
+      } else {
+          minRadius = 99999999; // Essentially hide all except targets
+      }
     }
 
+    let visibleAsteroids = engine.asteroidGrid.getVisibleAsteroids(
+      wx - viewW * boundMult, wy - viewH * boundMult, 
+      wx + viewW * boundMult, wy + viewH * boundMult,
+      minRadius, engine.targetAsteroidId, engine.miningTargetId
+    );
+    
+    // Throttled log of visible asteroids
+    const lastLog = (globalThis as any)._lastAstLog || 0;
+    if (Date.now() - lastLog > 2000) {
+      console.log("[ASTEROID RENDERING] Visible asteroids count:", visibleAsteroids.length);
+      (globalThis as any)._lastAstLog = Date.now();
+    }
+    
+    // 1. Draw all asteroids first
     renderer.updateAsteroidInstances(visibleAsteroids, camera, now, engine.targetAsteroidId, engine.miningTargetId);
 
-    // ── Deep Space Asteroid Field Prediction ──
-    if (showFields && (curMode === 'LOCAL' || curMode === 'TACTICAL')) {
-        const activeChunks = engine.asteroidGrid.getActiveChunks();
-        for (const chunk of activeChunks) {
-            const secSize = Number(SECTOR_SIZE_M);
-            const centerCoords: GlobalCoords = { 
-                sectorX: BigInt(Math.floor(chunk.cx / secSize)),
-                sectorY: BigInt(Math.floor(chunk.cy / secSize)),
-                offsetX: chunk.cx % secSize,
-                offsetY: chunk.cy % secSize
-            };
-            camera.normalize(centerCoords);
-            // Hex chunks are approx 2M wide, we draw a 1.2M diameter haze
-            renderer.drawAsteroidRing(centerCoords, 0, ASTEROID_CHUNK_SIZE * 0.6, camera, now);
-        }
+    // ── Deep Space Asteroid Field Prediction (Analytical Haze) ──
+    if (showFields && curMode !== 'LOCAL' && camera.zoom <= 0.05) {
+      renderer.drawAsteroidFieldDensity(engine.asteroidGrid, camera, engine.currentSystem, now);
+    } else {
+      renderer.hideAsteroidFieldDensity();
     }
 
     // 2. Draw targeting frames on top of everything
@@ -296,6 +297,7 @@ export const renderWorldObjects = (
     });
   } else {
     renderer.updateAsteroidInstances([], camera, now);
+    renderer.hideAsteroidFieldDensity();
   }
 };
 

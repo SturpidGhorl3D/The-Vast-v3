@@ -22,6 +22,7 @@ export interface Technology {
     compartments?: string[];
     weapons?: string[];
     recipes?: string[];
+    features?: string[];
     stats?: Record<string, number>;
   };
   isBreakthrough?: boolean;

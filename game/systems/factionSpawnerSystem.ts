@@ -7,6 +7,8 @@ import { getLargestShipDimension } from '../hullGeometry';
 const MAX_NPCS_PER_SYSTEM = 10;
 let spawnerTimer = 0;
 
+const AI_FACTION_COMPONENTS = ['AIState', 'Position', 'Faction'];
+
 export function factionSpawnerSystem(ecs: ECS, engine: any, dt: number) {
   spawnerTimer += dt;
   // only try to spawn once every few seconds
@@ -17,7 +19,7 @@ export function factionSpawnerSystem(ecs: ECS, engine: any, dt: number) {
   if (!currentSystem) return;
 
   // Count current NPCs
-  const npcs = ecs.getEntitiesWith(['AIState', 'Position', 'Faction']);
+  const npcs = ecs.getEntitiesWith(AI_FACTION_COMPONENTS, 'AIState,Position,Faction');
   
   if (npcs.length >= MAX_NPCS_PER_SYSTEM) return;
 

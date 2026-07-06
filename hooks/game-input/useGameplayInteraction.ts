@@ -140,13 +140,47 @@ export const useGameplayInteraction = ({
           }, 600);
         }
 
-        if (engine.interactionMode === 'WAYPOINT' && worldPos && worldPos.sectorX !== undefined) {
+        // Interaction modes block each other.
+        // User says Mining should ONLY be blocked when explicitly in WAYPOINT adding mode.
+        const isWaypointMode = engine.interactionMode === 'WAYPOINT' || (engine.movementMode === 'TACTICAL' && engine.tacticalClickMode === 'WAYPOINT');
+        
+        if (engine.interactionMode === 'MINING' && !isWaypointMode) {
+            const asteroids = engine.asteroidGrid.getVisibleAsteroids();
+            let targetAsteroid = null;
+            let bestDist = Infinity;
+            
+            const mouseWorld = engine.camera.screenToWorld(mouseX, mouseY, r.width, r.height);
+            const secSizeBI = BigInt(SECTOR_SIZE_M);
+            const mouseX2 = BigInt(mouseWorld.sectorX) * secSizeBI + BigInt(Math.floor(mouseWorld.offsetX));
+            const mouseY2 = BigInt(mouseWorld.sectorY) * secSizeBI + BigInt(Math.floor(mouseWorld.offsetY));
+
+            for (const ast of asteroids) {
+              const astX = BigInt(ast.sectorX) * secSizeBI + BigInt(Math.floor(ast.offsetX));
+              const astY = BigInt(ast.sectorY) * secSizeBI + BigInt(Math.floor(ast.offsetY));
+              const dx = Number(astX - mouseX2);
+              const dy = Number(astY - mouseY2);
+              const dist = Math.hypot(dx, dy);
+              
+              const pickRange = Math.max(ast.radius * 2.0, 5000 / engine.camera.zoom);
+              if (dist < pickRange && dist < bestDist) {
+                bestDist = dist;
+                targetAsteroid = ast;
+              }
+            }
+            if (targetAsteroid) {
+              setSelectedAsteroid(targetAsteroid);
+              setIsMiningWindowOpen(true);
+              engine.targetAsteroidId = targetAsteroid.id;
+              return; // Consumed
+            }
+        }
+
+        if (isWaypointMode && worldPos && worldPos.sectorX !== undefined) {
            (engine as any)._pendingWaypoint = worldPos;
            return;
         }
 
         if (engine.tacticalClickMode === 'WARP_TARGET') {
-          // REMOVED SNAP TO OBJECT CENTERS - USER REQUEST
           engine.warpTarget = { ...worldPos };
           setWarpTarget(engine.warpTarget);
           engine.tacticalClickMode = 'NONE';
@@ -154,73 +188,52 @@ export const useGameplayInteraction = ({
           return;
         }
 
-        if (engine.movementMode === 'TACTICAL') {
-          if (engine.tacticalClickMode === 'WAYPOINT') {
-            (engine as any)._pendingWaypoint = worldPos;
+        if (engine.movementMode === 'TACTICAL' && !isWaypointMode) {
+           // Direct tactical click (no waypoint) - maybe selection? 
+           // For now just allow fall through to general selection logic
+        }
+
+        if (engine.interactionMode === 'COMBAT') {
+          const entities = engine.ecs.getEntitiesWith(['Position', 'Hull']);
+          let hoverEntity = null;
+          let minHoverDist = 100 / engine.camera.zoom;
+          for (const entity of entities) {
+            if (entity === engine.player) continue;
+            const pos = engine.ecs.getPosition(entity)!;
+            const sX1 = pos.sectorX ?? 0n;
+            const sX2 = worldPos.sectorX ?? 0n;
+            const sY1 = pos.sectorY ?? 0n;
+            const sY2 = worldPos.sectorY ?? 0n;
+            const dx = pos.offsetX - worldPos.offsetX + Number(BigInt(sX1) - BigInt(sX2)) * Number(SECTOR_SIZE_M);
+            const dy = pos.offsetY - worldPos.offsetY + Number(BigInt(sY1) - BigInt(sY2)) * Number(SECTOR_SIZE_M);
+            const dist = Math.hypot(dx, dy);
+            if (dist < minHoverDist) { hoverEntity = entity; minHoverDist = dist; }
+          }
+          if (hoverEntity !== null) {
+            if (engine.targetDesignationMode) {
+              if (!engine.designatedTargets.includes(hoverEntity)) engine.designatedTargets.push(hoverEntity);
+            } else {
+              engine.combatTargetId = hoverEntity;
+              engine.combatFireAngle = null;
+            }
           } else {
-            (engine as any)._pendingWaypoint = null;
+            const pl = engine.player;
+            const pPos = pl !== null ? engine.ecs.getPosition(pl) : null;
+            if (pPos) {
+              const sX1 = worldPos.sectorX ?? 0n;
+              const sX2 = pPos.sectorX ?? 0n;
+              const sY1 = worldPos.sectorY ?? 0n;
+              const sY2 = pPos.sectorY ?? 0n;
+              const dx = worldPos.offsetX - pPos.offsetX + Number(BigInt(sX1) - BigInt(sX2)) * Number(SECTOR_SIZE_M);
+              const dy = worldPos.offsetY - pPos.offsetY + Number(BigInt(sY1) - BigInt(sY2)) * Number(SECTOR_SIZE_M);
+              engine.combatFireAngle = Math.atan2(dy, dx) - pPos.angle;
+              engine.combatTargetId = null;
+            }
           }
           return;
         }
-
-        if (viewMode === 'LOCAL') {
-          if (engine.interactionMode === 'MINING') {
-            const asteroids = engine.asteroidGrid.getVisibleAsteroids();
-            let targetAsteroid = null;
-            for (const ast of asteroids) {
-              const screenPos = engine.camera.worldToScreen(ast, r.width, r.height);
-              if (Math.hypot(screenPos.x - mouseX, screenPos.y - mouseY) < Math.max(20, ast.radius * engine.camera.zoom)) {
-                targetAsteroid = ast; break;
-              }
-            }
-            if (targetAsteroid) {
-              setSelectedAsteroid(targetAsteroid);
-              setIsMiningWindowOpen(true);
-              engine.targetAsteroidId = targetAsteroid.id;
-            }
-            return;
-          }
-
-          if (engine.interactionMode === 'COMBAT') {
-            const entities = engine.ecs.getEntitiesWith(['Position', 'Hull']);
-            let hoverEntity = null;
-            let minHoverDist = 100 / engine.camera.zoom;
-            for (const entity of entities) {
-                if (entity === engine.player) continue;
-                const pos = engine.ecs.getPosition(entity)!;
-                const sX1 = pos.sectorX ?? 0n;
-                const sX2 = worldPos.sectorX ?? 0n;
-                const sY1 = pos.sectorY ?? 0n;
-                const sY2 = worldPos.sectorY ?? 0n;
-                const dx = pos.offsetX - worldPos.offsetX + Number(BigInt(sX1) - BigInt(sX2)) * Number(SECTOR_SIZE_M);
-                const dy = pos.offsetY - worldPos.offsetY + Number(BigInt(sY1) - BigInt(sY2)) * Number(SECTOR_SIZE_M);
-                if (Math.hypot(dx, dy) < minHoverDist) { hoverEntity = entity; minHoverDist = Math.hypot(dx, dy); }
-            }
-            if (hoverEntity !== null) {
-                if (engine.targetDesignationMode) {
-                    if (!engine.designatedTargets.includes(hoverEntity)) engine.designatedTargets.push(hoverEntity);
-                } else {
-                    engine.combatTargetId = hoverEntity;
-                    engine.combatFireAngle = null;
-                }
-            } else {
-                const pl = engine.player;
-                const pPos = pl !== null ? engine.ecs.getPosition(pl) : null;
-                if (pPos) {
-                    const sX1 = worldPos.sectorX ?? 0n;
-                    const sX2 = pPos.sectorX ?? 0n;
-                    const sY1 = worldPos.sectorY ?? 0n;
-                    const sY2 = pPos.sectorY ?? 0n;
-                    const dx = worldPos.offsetX - pPos.offsetX + Number(BigInt(sX1) - BigInt(sX2)) * Number(SECTOR_SIZE_M);
-                    const dy = worldPos.offsetY - pPos.offsetY + Number(BigInt(sY1) - BigInt(sY2)) * Number(SECTOR_SIZE_M);
-                    engine.combatFireAngle = Math.atan2(dy, dx) - pPos.angle;
-                    engine.combatTargetId = null;
-                }
-            }
-            return;
-          }
-          if (engine.tryPickUpLoot(mouseX, mouseY)) return;
-        }
+        
+        if (engine.tryPickUpLoot(mouseX, mouseY)) return;
       }
 
       if (e.button === 2) {

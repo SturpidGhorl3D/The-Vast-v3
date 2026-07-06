@@ -1,14 +1,14 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence, useDragControls } from 'motion/react';
-import { Pickaxe, Info, X, Zap, Box, Database } from 'lucide-react';
+import { Pickaxe, Info, X, Zap, Box, Database, Target } from 'lucide-react';
 
 interface MiningWindowProps {
   asteroid: any | null;
   isOpen: boolean;
   onClose: () => void;
-  onStartMining: (id: string) => void;
+  onStartMining: (id: string, resourceKey?: string | null) => void;
   isMining: boolean;
   resources: Record<string, number>;
   maxCapacity: number;
@@ -26,6 +26,12 @@ export default function MiningWindow({
   const usedCapacity = Object.values(resources).reduce((a, b) => a + b, 0);
   const isFull = usedCapacity >= maxCapacity;
   const dragControls = useDragControls();
+  const [selectedResource, setSelectedResource] = useState<string | null>(null);
+
+  // Reset selected resource when asteroid changes
+  React.useEffect(() => {
+    setSelectedResource(null);
+  }, [asteroid?.id]);
 
   return (
     <AnimatePresence>
@@ -82,15 +88,26 @@ export default function MiningWindow({
 
           {/* Resources List */}
           <div className="space-y-2">
-            <div className="text-[8px] uppercase tracking-widest text-cyan-400/60 font-bold flex items-center gap-1">
-              <Info className="w-3 h-3" /> Composition
+            <div className="text-[8px] uppercase tracking-widest text-cyan-400/60 font-bold flex flex-col gap-1">
+              <div className="flex items-center gap-1"><Info className="w-3 h-3" /> Composition</div>
+              {!isMining && <div className="text-[7px] text-cyan-200/40">Select a specific resource to focus extraction (50% yield, 75% mass loss), or click again to extract all normally.</div>}
             </div>
             <div className="grid grid-cols-2 gap-2">
               {Object.entries(asteroid.resources).map(([res, amount]: [string, any]) => (
-                <div key={res} className="bg-white/5 p-2 border border-white/10 rounded flex flex-col gap-0.5">
-                  <span className="text-[8px] text-white/40 uppercase">{res}</span>
+                <button 
+                  key={res} 
+                  onClick={() => !isMining && setSelectedResource(prev => prev === res ? null : res)}
+                  className={`p-2 border rounded flex flex-col gap-0.5 text-left transition-colors ${
+                    selectedResource === res 
+                      ? 'bg-cyan-500/20 border-cyan-400/50' 
+                      : 'bg-white/5 border-white/10 hover:bg-white/10'
+                  } ${isMining ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <span className={`text-[8px] uppercase ${selectedResource === res ? 'text-cyan-200' : 'text-white/40'}`}>
+                    {res} {selectedResource === res && <Target className="inline w-3 h-3 ml-1 text-cyan-400" />}
+                  </span>
                   <span className="text-[10px] text-white font-bold">{(amount).toLocaleString()} t</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -121,10 +138,10 @@ export default function MiningWindow({
               </div>
             ) : (
               <button
-                onClick={() => onStartMining(asteroid.id)}
+                onClick={() => onStartMining(asteroid.id, selectedResource)}
                 className="w-full py-3 bg-cyan-600/20 hover:bg-cyan-600/40 border border-cyan-500/50 text-cyan-200 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2"
               >
-                <Pickaxe className="w-4 h-4" /> Start Extraction
+                <Pickaxe className="w-4 h-4" /> {selectedResource ? `Extract ${selectedResource}` : 'Extract All'}
               </button>
             )}
           </div>

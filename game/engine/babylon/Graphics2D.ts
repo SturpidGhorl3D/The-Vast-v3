@@ -4,41 +4,48 @@ import earcut from 'earcut';
 export class Graphics2D {
   private scene: BABYLON.Scene;
   private mesh: BABYLON.Mesh;
-  private lineMesh: BABYLON.Mesh;
   
   private positions: number[] = [];
   private indices: number[] = [];
   private colors: number[] = [];
-  
-  private linePositions: number[] = [];
-  private lineIndices: number[] = [];
-  private lineColors: number[] = [];
   
   private paths: {x: number, y: number}[][] = [];
   private currentPath: {x: number, y: number}[] = [];
   private zIndex: number = 0;
   private needsClearPaths: boolean = false;
 
-  constructor(scene: BABYLON.Scene, renderingGroupId: number = 1) {
+  constructor(scene: BABYLON.Scene, renderingGroupId: number = 1, customMaterial?: BABYLON.Material) {
     this.scene = scene;
     
     this.mesh = new BABYLON.Mesh("graphics2D", scene);
-    this.mesh.hasVertexAlpha = true;
     this.mesh.renderingGroupId = renderingGroupId;
     
-    const mat = new BABYLON.StandardMaterial("graphics2DMat", scene);
-    mat.emissiveColor = BABYLON.Color3.White();
-    mat.disableLighting = true;
-    mat.backFaceCulling = false;
-    mat.useVertexColors = true;
-    mat.hasAlpha = true;
-    mat.useAlphaFromColors = true;
-    mat.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
-    mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
-    mat.disableDepthWrite = true;
-    mat.needDepthPrePass = false;
-    
-    this.mesh.material = mat;
+    if (customMaterial) {
+        this.mesh.material = customMaterial;
+    } else {
+        const mat = new BABYLON.StandardMaterial("graphics2DMat", scene) as any;
+        mat.emissiveColor = BABYLON.Color3.White();
+        mat.disableLighting = true;
+        mat.backFaceCulling = false;
+        mat.useVertexColors = true;
+        mat.hasAlpha = true;
+        mat.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+        mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+        mat.disableDepthWrite = true;
+        mat.needDepthPrePass = false;
+        this.mesh.material = mat;
+    }
+    this.mesh.hasVertexAlpha = true;
+
+    // CRITICAL for WebGPU: Populate initial dummy geometry to satisfy pipeline validation on frame one
+    const initialData = new BABYLON.VertexData();
+    initialData.positions = [0, 0, 0];
+    initialData.indices = [0, 0, 0];
+    initialData.colors = [0, 0, 0, 0];
+    initialData.normals = [0, 0, 1];
+    initialData.uvs = [0, 0];
+    initialData.applyToMesh(this.mesh, true);
+    this.mesh.isVisible = false;
   }
 
   public clear() {
@@ -225,12 +232,28 @@ export class Graphics2D {
         vertexData.positions = this.positions;
         vertexData.indices = this.indices;
         vertexData.colors = this.colors;
-        const normals: number[] = [];
-        BABYLON.VertexData.ComputeNormals(this.positions, this.indices, normals);
+
+        // Force all normals to point at the camera (-Z) to ensure consistent 2D lighting
+        const normals: number[] = new Array(this.positions.length).fill(0);
+        for(let i = 2; i < normals.length; i += 3) {
+             normals[i] = -1.0;
+        }
         vertexData.normals = normals;
+        
+        const uvs: number[] = new Array((this.positions.length / 3) * 2).fill(0);
+        vertexData.uvs = uvs;
+
         vertexData.applyToMesh(this.mesh, true);
         this.mesh.isVisible = true;
     } else {
+        // Keep dummy geometry to satisfy WebGPU validation when the mesh is cleared
+        const vertexData = new BABYLON.VertexData();
+        vertexData.positions = [0, 0, 0];
+        vertexData.indices = [0, 0, 0];
+        vertexData.colors = [0, 0, 0, 0];
+        vertexData.normals = [0, 0, 1];
+        vertexData.uvs = [0, 0];
+        vertexData.applyToMesh(this.mesh, true);
         this.mesh.isVisible = false;
     }
   }

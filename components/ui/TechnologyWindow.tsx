@@ -96,7 +96,7 @@ export default function TechnologyWindow({
     return false;
   }, [allTechs, researchedTechs, activeResearch, availableTechOptions, pendingInnovationChoices, pendingBranchChoices]);
 
-  const visibleTechs = useMemo(() => allTechs.filter(isVisible), [allTechs, researchedTechs, activeResearch, availableTechOptions, pendingInnovationChoices, pendingBranchChoices, isVisible]);
+  const visibleTechs = useMemo(() => allTechs.filter(isVisible), [allTechs, isVisible]);
   
   const reqsMet = (tech: Technology) => {
     return tech.requirements.length === 0 || tech.requirements.every(req => researchedTechs.includes(req));
@@ -180,24 +180,36 @@ export default function TechnologyWindow({
     return pos;
   }, [allTechs, nodePositions, draggedNode]);
 
+  const lastCategoryRef = useRef<TechCategory | null>(null);
+  const lastOpenRef = useRef<boolean>(false);
+
   // Auto-center camera when category changes
   useEffect(() => {
-    if (!isOpen) return;
-    
-    // We want to center the tree nodes in the current view
-    const visiblePosValues = visibleTechs.map(t => activePositions[t.id]).filter(Boolean);
-    if (visiblePosValues.length > 0 && canvasRef.current) {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const avgX = visiblePosValues.reduce((sum, p) => sum + p!.x, 0) / visiblePosValues.length;
-      const avgY = visiblePosValues.reduce((sum, p) => sum + p!.y, 0) / visiblePosValues.length;
-      
-      // We want avgX * scale + panX = rect.width / 2
-      setPan({
-        x: rect.width / 2 - (avgX + 140) * scale, // +140 to center the card width
-        y: rect.height / 2 - (avgY + 40) * scale  // +40 to center the card height
-      });
+    if (!isOpen) {
+      lastOpenRef.current = false;
+      return;
     }
-  }, [activeCategory, isOpen]);
+    
+    const isNewOpen = isOpen && !lastOpenRef.current;
+    const isNewCategory = activeCategory !== lastCategoryRef.current;
+    
+    if (isNewOpen || isNewCategory) {
+      lastOpenRef.current = isOpen;
+      lastCategoryRef.current = activeCategory;
+      
+      const visiblePosValues = visibleTechs.map(t => activePositions[t.id]).filter(Boolean);
+      if (visiblePosValues.length > 0 && canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const avgX = visiblePosValues.reduce((sum, p) => sum + p!.x, 0) / visiblePosValues.length;
+        const avgY = visiblePosValues.reduce((sum, p) => sum + p!.y, 0) / visiblePosValues.length;
+        
+        setPan({
+          x: rect.width / 2 - (avgX + 140) * scale,
+          y: rect.height / 2 - (avgY + 40) * scale
+        });
+      }
+    }
+  }, [activeCategory, isOpen, activePositions, scale, visibleTechs]);
 
   const CATEGORIES: { id: TechCategory, label: string }[] = [
     { id: 'PHYSICS', label: 'Физика'},

@@ -214,6 +214,7 @@ export default function GameCanvas({
   const [isProductionOpen, setIsProductionOpen] = useState(false);
   const [hasFabricator, setHasFabricator] = useState(false);
   const [hasMachinery, setHasMachinery] = useState(false);
+  const [hasCargoManagement, setHasCargoManagement] = useState(false);
   const [hasCommunication, setHasCommunication] = useState(false);
   const [isEditorMenuOpen, setIsEditorMenuOpen] = useState(false);
   const [internalView, setInternalView] = useState(false);
@@ -385,6 +386,25 @@ export default function GameCanvas({
     setHasCommunication(comm);
   }, [shipHull.compartments]);
 
+  // Sync research features periodically
+  useEffect(() => {
+    if (!engine) return;
+    const interval = setInterval(() => {
+      setHasCargoManagement(engine.research.hasFeature('cargo_management'));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [engine]);
+
+  // Handle jettison cargo
+  const handleJettisonCargo = (resourceId: string, amount: number) => {
+    if (!engine || !engine.player) return;
+    const inv = engine.ecs.getComponent<any>(engine.player, 'Inventory');
+    if (inv && inv.resources[resourceId]) {
+      inv.resources[resourceId] = Math.max(0, inv.resources[resourceId] - amount);
+      setInventory({ ...inv.resources });
+    }
+  };
+
 
   const { handleProduce } = useProductionLogic({ engine, setInventory, setMaxCapacity });
 
@@ -477,9 +497,10 @@ export default function GameCanvas({
     setTargetDesignationMode
   });
 
-  const handleStartMining = (id: string) => {
+  const handleStartMining = (id: string, resourceKey?: string | null) => {
     if (!engine) return;
     engine.miningTargetId = id;
+    engine.miningTargetResource = resourceKey || null;
     if (id === '') {
       setIsMiningWindowOpen(false);
       setSelectedAsteroid(null);
@@ -624,7 +645,7 @@ export default function GameCanvas({
             renderer, camera, world, pos, curMode, now, engine, bounds, settingsRef.current
         );
 
-        renderer.drawProjectiles(engine, camera);
+        // renderer.drawProjectiles(engine, camera);
 
         if (curMode === 'STRATEGIC') {
             const gmr = engine.globalMapRenderer;
@@ -716,6 +737,8 @@ export default function GameCanvas({
           }}
           maxCapacity={maxCapacity}
           resources={inventory}
+          hasCargoManagement={hasCargoManagement}
+          onJettisonCargo={handleJettisonCargo}
           warpTarget={warpTarget}
           cooldownLeft={cooldownLeft}
           viewMode={viewMode}

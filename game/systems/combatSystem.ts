@@ -180,8 +180,11 @@ export function combatSystem(ecs: ECS, engine: GameEngine, dt: number) {
     }
 }
 
+const ENEMY_COMPONENTS = ['Position', 'Faction', 'Hull'];
+const HULL_COMPONENTS = ['Position', 'Hull'];
+
 function findNearestEnemy(ecs: ECS, engine: GameEngine, pos: Position, range: number): Entity | null {
-    const enemies = ecs.getEntitiesWith(['Position', 'Faction', 'Hull']);
+    const enemies = ecs.getEntitiesWith(ENEMY_COMPONENTS, 'Position,Faction,Hull');
     let nearest: Entity | null = null;
     let minDist = range;
 
@@ -221,46 +224,14 @@ function normalizeAngle(a: number) {
 function fireWeapon(ecs: ECS, engine: GameEngine, owner: Entity, weapon: Weapon) {
     weapon.lastFireTime = Date.now();
     weapon.fireCounter = 0; // RESET COUNTER
-    const playerPos = ecs.getPosition(owner)!;
-    const hull = ecs.getHull(owner)!;
-    const weaponPos = getTurretWorldPos(playerPos, hull, weapon.turretId);
-    const absoluteAngle = playerPos.angle + weapon.turretAngle;
-
-    for (let i = 0; i < weapon.barrelCount; i++) {
-        const proj = ecs.createEntity();
-        const spread = (Math.random() - 0.5) * 0.02;
-        const angle = absoluteAngle + spread;
-        
-        ecs.addComponent<Position>(proj, 'Position', {
-            sectorX: playerPos.sectorX,
-            sectorY: playerPos.sectorY,
-            offsetX: weaponPos.x,
-            offsetY: weaponPos.y,
-            angle: angle
-        });
-
-        ecs.addComponent<Velocity>(proj, 'Velocity', {
-            vx: Math.cos(angle) * weapon.projectileSpeed,
-            vy: Math.sin(angle) * weapon.projectileSpeed,
-            va: 0
-        });
-
-        ecs.addComponent(proj, 'Projectile', {
-            ownerId: owner,
-            damage: weapon.damage,
-            speed: weapon.projectileSpeed,
-            range: weapon.range,
-            distanceTraveled: 0,
-            type: 'BALLISTIC'
-        });
-    }
+    // Logic for ECS projectiles removed
 }
 
 function handleTargeting(ecs: ECS, engine: GameEngine, dt: number) {
     const mouseWorld = engine.mouseWorld;
     
     // Find enemies near mouse
-    const entities = ecs.getEntitiesWith(['Position', 'Hull']); 
+    const entities = ecs.getEntitiesWith(HULL_COMPONENTS, 'Position,Hull'); 
     let hoverEntity: Entity | null = null;
     let minHoverDist = 100 / engine.camera.zoom; 
 

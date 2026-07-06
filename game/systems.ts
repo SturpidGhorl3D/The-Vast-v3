@@ -13,7 +13,6 @@ export { miningSystem } from './systems/miningSystem';
 export { renderSystem } from './systems/renderSystem';
 export { combatSystem } from './systems/combatSystem';
 export { turretSystem } from './systems/turretSystem';
-export { projectileSystem } from './systems/projectileSystem';
 
 /** Calculate total cargo capacity based on CARGO compartments volume. */
 export function calculateMaxCapacity(hull: Hull): number {

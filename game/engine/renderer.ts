@@ -5,7 +5,6 @@ import { GlobalCoords } from '../../components/game/types';
 import { WorldRenderer } from './renderers/WorldRenderer';
 import { ShipRenderer } from './renderers/ShipRenderer';
 import { HUDOverlayRenderer } from './renderers/HUDOverlayRenderer';
-import { ProjectileRenderer } from './renderers/ProjectileRenderer';
 import { CelestialRenderer } from './renderers/CelestialRenderer';
 import { Graphics2D } from './babylon/Graphics2D';
 
@@ -13,9 +12,12 @@ export class Renderer {
   public engine: BABYLON.WebGPUEngine | BABYLON.Engine | null = null;
   public scene!: BABYLON.Scene;
   public camera!: BABYLON.TargetCamera;
+  public dirLight!: BABYLON.DirectionalLight;
+  public ambientLight!: BABYLON.HemisphericLight;
 
+  public bgGraphics!: Graphics2D;
   public graphics!: Graphics2D;
-  public projectileGraphics!: Graphics2D;
+  public shipGraphics!: Graphics2D;
   public canvas: HTMLCanvasElement;
   private _logicalWidth: number = 0;
   private _logicalHeight: number = 0;
@@ -23,7 +25,6 @@ export class Renderer {
   private worldRenderer!: WorldRenderer;
   private shipRenderer!: ShipRenderer;
   private hudOverlayRenderer!: HUDOverlayRenderer;
-  private projectileRenderer!: ProjectileRenderer;
   private celestialRenderer!: CelestialRenderer;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -57,15 +58,40 @@ export class Renderer {
 
     this.scene.activeCamera = this.camera;
 
-    this.graphics = new Graphics2D(this.scene, 1);
-    this.projectileGraphics = new Graphics2D(this.scene, 2);
+    // Add lighting for specular highlights and shadows on decks
+    this.dirLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(0, 0, 1), this.scene);
+    this.dirLight.intensity = 0.8;
+    this.dirLight.specular = new BABYLON.Color3(1, 1, 1);
+    
+    this.ambientLight = new BABYLON.HemisphericLight("ambientLight", new BABYLON.Vector3(0, 0, -1), this.scene);
+    this.ambientLight.intensity = 0.4;
+    this.ambientLight.specular = new BABYLON.Color3(0.1, 0.1, 0.1);
 
-    this.worldRenderer = new WorldRenderer(this.graphics as any, this.scene);
-    this.shipRenderer = new ShipRenderer(this.graphics as any);
-    this.shipRenderer.setFXGraphics(this.projectileGraphics as any);
+    this.bgGraphics = new Graphics2D(this.scene, 0);
+    this.graphics = new Graphics2D(this.scene, 3);
+    
+    // Create lit material for ship
+    const shipMat = new BABYLON.StandardMaterial("shipGraphicsMat", this.scene) as any;
+    shipMat.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+    shipMat.diffuseColor = BABYLON.Color3.White();
+    shipMat.specularColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+    shipMat.specularPower = 16;
+    shipMat.disableLighting = false;
+    shipMat.backFaceCulling = false;
+    shipMat.useVertexColors = true;
+    shipMat.hasAlpha = true;
+    shipMat.alphaMode = BABYLON.Engine.ALPHA_COMBINE;
+    shipMat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    shipMat.disableDepthWrite = true;
+    shipMat.needDepthPrePass = false;
+
+    this.shipGraphics = new Graphics2D(this.scene, 2, shipMat);
+
+    this.worldRenderer = new WorldRenderer(this.bgGraphics as any, this.scene);
+    this.shipRenderer = new ShipRenderer(this.shipGraphics as any);
+    this.shipRenderer.setFXGraphics(this.graphics as any);
     
     this.hudOverlayRenderer = new HUDOverlayRenderer(this.graphics as any);
-    this.projectileRenderer = new ProjectileRenderer(this.projectileGraphics as any);
     
     this.celestialRenderer = new CelestialRenderer(this.scene);
     this.worldRenderer.setCelestialRenderer(this.celestialRenderer);
@@ -73,8 +99,9 @@ export class Renderer {
 
   public render() {
       if (this.scene && this.engine) {
+          this.bgGraphics.update();
           this.graphics.update();
-          this.projectileGraphics.update();
+          this.shipGraphics.update();
           this.engine.beginFrame();
           this.scene.render();
           this.engine.endFrame();
@@ -112,8 +139,9 @@ export class Renderer {
       this.worldRenderer.beginFrame();
     }
 
+    this.bgGraphics.clear();
     this.graphics.clear();
-    this.projectileGraphics.clear();
+    if (this.shipGraphics) this.shipGraphics.clear();
     
     if (this.scene && color !== 'transparent') {
         let sc = this.shipRenderer.parseColor(color).color;
@@ -126,10 +154,40 @@ export class Renderer {
 
   drawStar(data: any, camera: Camera, isGlobal: boolean, now: number = 0) {
     this.worldRenderer.drawStar(data, camera, this.width, this.height, isGlobal, now);
+    if (!isGlobal) {
+        // Calculate light direction from center of screen (ship focus) to star
+        const cx = this.width / 2;
+        const cy = this.height / 2;
+        const sx = (data.x - camera.x) * camera.zoom + cx;
+        const sy = (data.y - camera.y) * camera.zoom + cy;
+        // Direction from star to ship (center) in screen space
+        const dx = cx - sx;
+        const dy = cy - sy;
+        const len = Math.sqrt(dx*dx + dy*dy);
+        if (len > 0.001) {
+            // Babylon DirectionalLight direction is the direction the light is travelling.
+            // Screen +Y is down, but Babylon physical +Y is up. So we use -dy.
+            // Our camera is at Z=-1000 looking at 0,0,0 (+Z). So light shining on the ship should have +Z direction.
+            // A slight Z angle to mimic top-down lighting.
+            this.dirLight.direction = new BABYLON.Vector3(dx / len, -dy / len, 1.0).normalize();
+        }
+    }
   }
 
   drawPlanet(data: any, camera: Camera, now: number = 0, lightDir: {x: number, y: number} = {x: 0, y: 0}) {
     this.worldRenderer.drawPlanet(data, camera, this.width, this.height, now, lightDir);
+  }
+
+  drawAsteroidChunk(coords: GlobalCoords, radius: number, camera: Camera) {
+    this.worldRenderer.drawAsteroidChunk(coords, radius, camera, this.width, this.height);
+  }
+
+  drawAsteroidFieldDensity(gridManager: any, camera: Camera, currentSystem: any, now: number) {
+    this.worldRenderer.drawAsteroidFieldDensity(gridManager, camera, currentSystem, this.width, this.height, now);
+  }
+
+  hideAsteroidFieldDensity() {
+    this.worldRenderer.hideAsteroidFieldDensity();
   }
 
   drawAsteroidRing(
@@ -156,10 +214,6 @@ export class Renderer {
 
   drawGrid(camera: Camera, spacing: number) {
     this.worldRenderer.drawGrid(camera, this.width, this.height, spacing);
-  }
-
-  drawProjectiles(engine: any, camera: Camera) {
-    this.projectileRenderer.draw(engine, camera, this.width, this.height);
   }
 
   drawShip(coords: GlobalCoords, angle: number, hull: any, camera: Camera, isEditor = false, internalView = false, engine?: any, ecs?: any, entity?: any) {

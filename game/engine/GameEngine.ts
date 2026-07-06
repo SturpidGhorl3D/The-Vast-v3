@@ -12,7 +12,6 @@ import {
   miningSystem, 
   combatSystem,
   turretSystem,
-  projectileSystem,
   Position,
   Velocity,
   Hull,
@@ -48,7 +47,6 @@ import { LIGHT_YEAR_M } from '@/game/constants';
 import { SaveManager, WorldState } from '@/lib/SaveManager';
 import { GameSave } from '@/components/ui/main-menu/MainMenu';
 
-import { ProjectileManager } from './ProjectileManager';
 import { audioManager } from './AudioManager';
 
 import { EditorManager } from './managers/EditorManager';
@@ -68,7 +66,6 @@ export class GameEngine {
   public ecs: ECS;
   public camera: Camera;
   public renderer: Renderer;
-  public projectiles: ProjectileManager;
   public world: WorldGenerator;
   public asteroidGrid!: AsteroidGridManager;
   public globalMapRenderer: GlobalMapRenderer | null = null;
@@ -115,6 +112,7 @@ export class GameEngine {
   public targetingStartTime: number = 0;
   public targetAsteroidId: string | null = null;
   public miningTargetId: string | null = null;
+  public miningTargetResource: string | null = null;
   public currentGravityWell: any = null;
   public mouseActionHold: { startTime: number; duration: number; pos: {x: number; y: number}; color?: string } | null = null;
   
@@ -228,7 +226,8 @@ export class GameEngine {
       pendingInnovationChoices: this.pendingInnovationChoices,
       pendingBranchChoices: this.pendingBranchChoices,
       techNodePositions: this.techNodePositions,
-      techBranchingCounts: this.techBranchingCounts
+      techBranchingCounts: this.techBranchingCounts,
+      modifiedAsteroidChunks: Object.fromEntries(this.asteroidGrid.modifiedChunks)
     };
 
     SaveManager.saveWorldState(state);
@@ -241,15 +240,32 @@ export class GameEngine {
     this.originId = save.originId;
     this.playerSpecies = save.species || null;
     
-    // Load state from GameSave
-    if ('researchedTechs' in save) this.researchedTechs = (save as any).researchedTechs;
-    if ('innovationPoints' in save) this.innovationPoints = (save as any).innovationPoints;
-    if ('activeResearch' in save) this.activeResearch = (save as any).activeResearch;
-    if ('availableTechOptions' in save) this.availableTechOptions = (save as any).availableTechOptions || [];
-    if ('pendingInnovationChoices' in save) this.pendingInnovationChoices = (save as any).pendingInnovationChoices || [];
-    if ('pendingBranchChoices' in save) this.pendingBranchChoices = (save as any).pendingBranchChoices || {};
-    if ('techNodePositions' in save) this.techNodePositions = (save as any).techNodePositions || {};
-    if ('techBranchingCounts' in save) this.techBranchingCounts = (save as any).techBranchingCounts || {};
+    const state = SaveManager.loadWorldState(save.id);
+    if (state === null) return null;
+
+    // Load state from WorldState
+    this.researchedTechs = state.researchedTechs || [];
+    this.innovationPoints = state.innovationPoints || 0;
+    this.activeResearch = state.activeResearch || null;
+    this.availableTechOptions = state.availableTechOptions || [];
+    this.pendingInnovationChoices = state.pendingInnovationChoices || [];
+    this.pendingBranchChoices = state.pendingBranchChoices || {};
+    this.techNodePositions = state.techNodePositions || {};
+    this.techBranchingCounts = state.techBranchingCounts || {};
+
+    if (state.visitedSectors) {
+      this.visited = new Set(state.visitedSectors);
+    }
+    if (state.scannedSystems) {
+      this.scanned = new Set(state.scannedSystems);
+    }
+
+    if (state.modifiedAsteroidChunks) {
+      this.asteroidGrid.workspace_or_temp_chunks = state.modifiedAsteroidChunks; // support any helper fields if needed
+      this.asteroidGrid.modifiedChunks = new Map(Object.entries(state.modifiedAsteroidChunks));
+    } else {
+      this.asteroidGrid.modifiedChunks = new Map();
+    }
 
     // Ensure initial available tech if none are present
     if (this.availableTechOptions.length === 0) {
@@ -257,16 +273,6 @@ export class GameEngine {
          // Use ResearchManager to roll initial options
          this.research.rollInitialOptions();
       }
-    }
-    
-    const state = SaveManager.loadWorldState(save.id);
-    if (state === null) return null;
-
-    if (state.visitedSectors) {
-      this.visited = new Set(state.visitedSectors);
-    }
-    if (state.scannedSystems) {
-      this.scanned = new Set(state.scannedSystems);
     }
     
     return state;
@@ -382,7 +388,6 @@ export class GameEngine {
     this.ecs = this.core.ecs;
     this.camera = new Camera();
     this.renderer = new Renderer(canvas);
-    this.projectiles = new ProjectileManager();
     this.world = this.core.world;
     this.asteroidGrid = this.core.asteroidGrid;
     
@@ -547,7 +552,6 @@ export class GameEngine {
       miningSystem(ecs, this, dt);
       combatSystem(ecs, this, dt);
       turretSystem(ecs, this, dt);
-      projectileSystem(ecs, this, dt);
       lootSystem(this.ecs, this, dt);
     }
 

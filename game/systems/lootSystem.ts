@@ -4,8 +4,10 @@ import { GameEngine } from '../engine/GameEngine';
 import { Position, Inventory, Loot } from '../engine/types';
 import { SECTOR_SIZE_M } from '../constants';
 
+const LOOT_COMPONENTS = ['Position', 'Loot'];
+
 export function lootSystem(ecs: ECS, engine: GameEngine, dt: number) {
-  const lootEntities = ecs.getEntitiesWith(['Position', 'Loot']);
+  const lootEntities = ecs.getEntitiesWith(LOOT_COMPONENTS, 'Position,Loot');
   const player = engine.player;
   if (player === null) return;
 

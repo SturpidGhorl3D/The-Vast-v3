@@ -1,206 +1,323 @@
-import { AsteroidObject, GridType, HexChunk, StarSystem } from './types';
-import { getHexCoords, createRNG } from './utils';
+import { AsteroidObject, GridType, StarSystem } from './types';
+import { createRNG } from './utils';
 import { CHUNK_SIZE_M, SECTOR_SIZE_M } from '../constants';
 import { makeAsteroidResources } from './AsteroidGenerator';
 import { WorldGenerator } from './WorldGenerator';
 
-// The size of a single local chunk where we spawn individual asteroids
 export const ASTEROID_CHUNK_SIZE = 1_000_000; 
 
-// We maintain a cache of loaded chunks
+export interface AsteroidChunk {
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  gridType: GridType;
+  parentId: string;
+  isAsteroidField: boolean;
+  density: number;
+  asteroids: AsteroidObject[];
+}
+
+/**
+ * AsteroidGridManager - Система управления астероидным полем.
+ * Управляет чанками астероидов, процедурной генерацией через Worker и 
+ * аналитическим расчетом плотности полей.
+ */
 export class AsteroidGridManager {
-  private noise: (x: number, y: number) => number;
-  public loadedChunks = new Map<string, HexChunk>();
-  private pendingChunks = new Set<string>();
-  private worldGenerator: WorldGenerator | null = null;
-  public onChunkLoaded?: (chunk: HexChunk) => void;
-  public onChunkUnloaded?: (chunk: HexChunk) => void;
+  public noise: (x: number, y: number) => number;
+  public loadedChunks = new Map<string, AsteroidChunk>();
+  public worldGenerator: WorldGenerator | null = null;
+  public onChunkLoaded?: (chunk: AsteroidChunk) => void;
+  public onChunkUnloaded?: (chunk: AsteroidChunk) => void;
+  public modifiedChunks = new Map<string, { lastModified: number; asteroids: any[] }>();
   
-  private worker: Worker | null = null;
+  /** 
+   * Отдельный воркер для выноса тяжелых расчётов генерации из основного потока.
+   * Предотвращает фризы UI при спавне тысяч астероидов в новых чанках.
+   */
+  public worker?: Worker;
   
   constructor(noiseFn: (x: number, y: number) => number) {
     this.noise = noiseFn;
-    if (typeof window !== 'undefined') {
-        try {
-            this.worker = new Worker(new URL('./world.worker.ts', import.meta.url));
-            this.worker.onmessage = this.handleWorkerMessage.bind(this);
-        } catch (e) {
-            console.error("Failed to initialize World Worker", e);
-        }
+  }
+
+  public registerAsteroidModification(asteroid: AsteroidObject) {
+    const chunkX = Math.floor(asteroid.rx / ASTEROID_CHUNK_SIZE);
+    const chunkY = Math.floor(asteroid.ry / ASTEROID_CHUNK_SIZE);
+    const key = `${chunkX},${chunkY}`;
+    const chunk = this.loadedChunks.get(key);
+    if (chunk) {
+      const compoundKey = `${chunk.parentId}_${chunk.x}_${chunk.y}`;
+      this.modifiedChunks.set(compoundKey, {
+        lastModified: Date.now(),
+        asteroids: chunk.asteroids.map(ast => ({
+          id: ast.id,
+          rx: ast.rx,
+          ry: ast.ry,
+          radius: ast.radius,
+          color: ast.color ?? '#8c8c80',
+          isPlanetoid: ast.isPlanetoid ?? (ast.radius > 2500),
+          resources: { ...ast.resources },
+          depleted: ast.depleted,
+          depletedAt: ast.depletedAt,
+          sectorX: ast.sectorX.toString(),
+          sectorY: ast.sectorY.toString(),
+          offsetX: ast.offsetX,
+          offsetY: ast.offsetY,
+          originalRadius: ast.originalRadius ?? ast.radius,
+          originalCapacity: ast.originalCapacity ?? ast.totalCapacity,
+          totalCapacity: ast.totalCapacity,
+        }))
+      });
     }
   }
 
+  /**
+   * Инициализирует фоновый поток генерации астероидов.
+   */
   public initWorker(seed: string) {
-      if (this.worker) {
-          this.worker.postMessage({ type: 'INIT', payload: { seed }, id: 'INIT' });
-      }
+    this.worker = new Worker(new URL('./asteroid.worker.ts', import.meta.url), { type: 'module' });
+    this.worker.onmessage = (e) => {
+        const { type, payload } = e.data;
+        if (type === 'CHUNK_DONE') {
+            const { chunkKey, asteroids } = payload;
+            const chunk = this.loadedChunks.get(chunkKey);
+            if (chunk) {
+                // Восстанавливаем BigInt после сериализации через Worker boundary
+                for (let i = 0; i < asteroids.length; i++) {
+                    asteroids[i].sectorX = BigInt(asteroids[i].sectorX);
+                    asteroids[i].sectorY = BigInt(asteroids[i].sectorY);
+                }
+                chunk.asteroids = asteroids;
+                if (this.onChunkLoaded) this.onChunkLoaded(chunk);
+                this.cachedVisibleAsteroids = []; // Сброс кэша видимых объектов
+            }
+        }
+    };
+    this.worker.postMessage({ type: 'INIT', payload: { seed } });
   }
 
   public setWorldGenerator(wg: WorldGenerator) {
     this.worldGenerator = wg;
   }
 
-  private handleWorkerMessage(e: MessageEvent) {
-      const { type, id, payload } = e.data;
-      if (type === 'CHUNK_DONE') {
-          const chunk = this.loadedChunks.get(id);
-          this.pendingChunks.delete(id);
-          if (chunk) {
-              const asteroids = payload.asteroids || [];
-              chunk.asteroids = asteroids;
-              
-              // Invalidate cache since we have new data
-              this.cachedVisibleAsteroids = [];
-              
-              // Calculate stats for visualization (Minecraft-style biome/richness mapping)
-              chunk.avgCount = asteroids.length;
-              let totalValue = 0;
-              let totalRarity = 0;
-              
-              asteroids.forEach((a: any) => {
-                  totalRarity += (a.isPlanetoid ? 0.8 : 0.2);
-                  if (a.resources) {
-                      Object.values(a.resources).forEach((v: any) => totalValue += Number(v));
-                  }
-              });
-              
-              chunk.avgRarity = asteroids.length > 0 ? totalRarity / asteroids.length : 0;
-              chunk.avgValue = asteroids.length > 0 ? totalValue / asteroids.length : 0;
-
-              if (this.onChunkLoaded) this.onChunkLoaded(chunk);
-          }
-      }
+  public getDeepSpaceHazeStrength(cx: number, cy: number): boolean {
+      return this.getAsteroidFieldStrength(cx, cy, { currentSystem: null }).isAsteroidField;
   }
-
-  private cachedCoarseMeshes: {x: number, y: number}[][] | null = null;
-  private cachedCoarseBounds: {minX: number, minY: number, maxX: number, maxY: number} | null = null;
-
-  public getAsteroidFieldStrength(cx: number, cy: number, worldInfo: { currentSystem: StarSystem | null }): { isAsteroidField: boolean, gridType: GridType, parentId: string } {
+  
+  /**
+   * Аналитический расчет плотности астероидного поля в конкретной точке мира.
+   * Используется для отрисовки "дымки" (haze) и принятия решения о генерации объектов.
+   * 
+   * @param cx Мировая координата X
+   * @param cy Мировая координата Y
+   * @param worldInfo Контекст текущей звездной системы
+   * @returns Объект с флагом наличия поля и его плотностью (0.0 - 1.0)
+   */
+  public getAsteroidFieldStrength(cx: number, cy: number, worldInfo: { currentSystem: StarSystem | null }): { isAsteroidField: boolean, gridType: GridType, parentId: string, density: number } {
     let isAsteroidField = false;
     let gridType: GridType = 'GLOBAL';
     let parentId = 'GLOBAL';
+    let density = 0.0;
     
-    // Determine controlling system for THIS specific point, not just where player is
     let controllingSystem = worldInfo.currentSystem;
-    if (this.worldGenerator) {
-       const secSize = Number(SECTOR_SIZE_M);
-       const sX = BigInt(Math.floor(cx / secSize));
-       const sY = BigInt(Math.floor(cy / secSize));
-       const oX = cx - Number(sX) * secSize;
-       const oY = cy - Number(sY) * secSize;
-       controllingSystem = this.worldGenerator.getNearestSystem(sX, sY, oX, oY);
-    }
-
-    const baseNoise = (this.noise(cx * 1e-10, cy * 1e-10) + 1) / 2;
     
     if (controllingSystem) {
       const sys = controllingSystem;
-      const secSizeBI = BigInt(SECTOR_SIZE_M);
-      const sxBI = sys.sectorX * secSizeBI + BigInt(Math.floor(sys.offsetX));
-      const syBI = sys.sectorY * secSizeBI + BigInt(Math.floor(sys.offsetY));
+      const info = worldInfo as any;
       
-      const dx = cx - Number(sxBI);
-      const dy = cy - Number(syBI);
+      const sx = info.sysWorldX !== undefined ? info.sysWorldX : Number(BigInt(sys.sectorX) * BigInt(SECTOR_SIZE_M) + BigInt(Math.floor(sys.offsetX)));
+      const sy = info.sysWorldY !== undefined ? info.sysWorldY : Number(BigInt(sys.sectorY) * BigInt(SECTOR_SIZE_M) + BigInt(Math.floor(sys.offsetY)));
+      
+      const dx = cx - sx;
+      const dy = cy - sy;
       const distSq = dx*dx + dy*dy;
-      const systemLimitSq = 1.40625e27; // (3.75e13)^2, approx 250 AU
+      const distToStar = Math.sqrt(distSq);
+      
+      const systemLimit = 3.75e13; // approx 250 AU
 
-      if (distSq < systemLimitSq) {
-        const distToStar = Math.sqrt(distSq);
-        const starRad = sys.starRadius || 700000;
-        if (distToStar >= starRad * 4.0) {
-          if (sys.asteroidBelts) {
-            for (const belt of sys.asteroidBelts) {
-              const margin = 1000000; // 1000km margin
-              if (distToStar > belt.minRadius - margin && distToStar < belt.maxRadius + margin) {
-                 if (baseNoise >= belt.threshold * 0.9) { // Slightly more lenient threshold
-                   isAsteroidField = true;
-                   break;
-                 }
-              }
-            }
-          }
-          if (!isAsteroidField && sys.asteroidClusters) {
-            for (const cluster of sys.asteroidClusters) {
-              const cX = Math.cos(cluster.orbitAngle) * cluster.orbitRadius;
-              const cY = Math.sin(cluster.orbitAngle) * cluster.orbitRadius;
-              const distToCluster = Math.hypot(dx - cX, dy - cY);
-              if (distToCluster < cluster.radius * 1.5) { // Braoder clusters
-                if (baseNoise >= (1.0 - cluster.density * 0.6)) {
-                  isAsteroidField = true;
-                  break;
-                }
-              }
+      // 1. ASTEROID BELTS
+      if (sys.asteroidBelts) {
+        for (const belt of sys.asteroidBelts) {
+          const R_min = belt.minRadius;
+          const R_max = belt.maxRadius;
+          
+          if (distToStar > R_min * 0.8 && distToStar < R_max * 1.25) {
+            const R_c = (R_min + R_max) / 2;
+            const H_w = (R_max - R_min) / 2;
+            const sigma = H_w / 2.5; 
+            
+            const pBelt = Math.exp(-Math.pow(distToStar - R_c, 2) / (2 * sigma * sigma));
+            if (pBelt > density) {
+              density = pBelt;
+              gridType = 'SYSTEM';
+              parentId = `sys-${sys.id}`;
             }
           }
         }
-        return { isAsteroidField, gridType: 'SYSTEM', parentId: `sys-${sys.id}` };
-      } else {
-        const deepNoise = (this.noise(cx * 4e-11, cy * 4e-11) + 1) / 2;
-        if (deepNoise > 0.42 && baseNoise >= 0.3) { // Significantly lower thresholds for deep clusters
+      }
+
+      // 2. ORBITAL CLUSTERS
+      if (sys.asteroidClusters) {
+        for (const cluster of sys.asteroidClusters) {
+          const cAngle = cluster.orbitAngle || 0;
+          const cRadius = cluster.orbitRadius || 0;
+          const cX = Math.cos(cAngle) * cRadius;
+          const cY = Math.sin(cAngle) * cRadius;
+          const distToCluster = Math.hypot(dx - cX, dy - cY);
+          
+          const noiseVal = this.noise(dx * 2e-6, dy * 2e-6);
+          const distortedDist = distToCluster + noiseVal * (cluster.radius * 0.25);
+          
+          if (distortedDist < cluster.radius) {
+            const cDensity = (cluster.density || 0.4) * (1.0 - distortedDist / cluster.radius);
+            if (cDensity > density) {
+              density = cDensity;
+              gridType = 'SYSTEM';
+              parentId = `sys-${sys.id}`;
+            }
+          }
+        }
+      }
+
+      // 3. BACKGROUND OORT HAZE
+      if (density < 0.15) {
+        let backgroundDensity = 0.0;
+        
+        if (distToStar >= systemLimit) {
+          const haloDist = distToStar - systemLimit;
+          const decayDist = 1.5e13; // 100 AU decay scale
+          const oortProb = 0.25 * Math.exp(-haloDist / decayDist);
+          
+          const anchorM = 1e15;
+          const nx = cx - Math.floor(cx / anchorM) * anchorM;
+          const ny = cy - Math.floor(cy / anchorM) * anchorM;
+          const lowFreqNoise = (this.noise(nx * 1e-12, ny * 1e-12) + 1) / 2;
+          backgroundDensity = oortProb * (0.7 + 0.3 * lowFreqNoise);
+        }
+        
+        if (distToStar > systemLimit) {
+          const anchorM = 1e15;
+          const nx = cx - Math.floor(cx / anchorM) * anchorM;
+          const ny = cy - Math.floor(cy / anchorM) * anchorM;
+          const nebNoise = (this.noise(nx * 1e-11, ny * 1e-11) + 1) / 2;
+          if (nebNoise > 0.4) {
+            const nebulousProb = 0.04 + (nebNoise - 0.4) * 0.12;
+            if (nebulousProb > backgroundDensity) {
+              backgroundDensity = nebulousProb;
+            }
+          }
+        }
+        
+        if (backgroundDensity > density) {
+          density = backgroundDensity;
+          gridType = 'SYSTEM';
+          parentId = `oort-${sys.id}`;
+        }
+      }
+
+      if (density > 0.01) {
           isAsteroidField = true;
-        }
-        gridType = 'GLOBAL';
-        parentId = 'GLOBAL';
       }
-    } else {
-      const deepNoise = (this.noise(cx * 4e-11, cy * 4e-11) + 1) / 2;
-      if (deepNoise > 0.42 && baseNoise >= 0.3) {
-        isAsteroidField = true;
-      }
-      gridType = 'GLOBAL';
-      parentId = 'GLOBAL';
+      
+      return { isAsteroidField, gridType, parentId, density };
     }
 
-    return { isAsteroidField, gridType, parentId };
+    // ----- GLOBAL DEEP SPACE TOPOLOGY -----
+    // 3. Rogue System Pockets
+    const anchorM = 1e15;
+    const nx = cx - Math.floor(cx / anchorM) * anchorM;
+    const ny = cy - Math.floor(cy / anchorM) * anchorM;
+
+    const rogueNoise = (this.noise(nx * 1.5e-12, ny * 1.5e-12) + 1) / 2;
+    if (rogueNoise > 0.88) {
+       const localPocketNoise = (this.noise(nx * 3e-11, ny * 3e-11) + 1) / 2;
+       if (localPocketNoise > 0.65) {
+          const rogueDensity = Math.min(1.0, (localPocketNoise - 0.65) / 0.35);
+          if (rogueDensity > density) {
+            density = rogueDensity;
+          }
+          if (density > 0.01) {
+             return { isAsteroidField: true, gridType: 'GLOBAL', parentId: 'ROGUE_POCKET', density };
+          }
+       }
+    }
+
+    // 4. Sparse Nebulous Zones
+    const nebNoise = (this.noise(nx * 1e-11, ny * 1e-11) + 1) / 2;
+    if (nebNoise > 0.4) {
+       const nebulousProb = 0.04 + (nebNoise - 0.4) * 0.12;
+       if (nebulousProb > density) {
+         density = nebulousProb;
+       }
+       if (density > 0.01) {
+          return { isAsteroidField: true, gridType: 'GLOBAL', parentId: 'NEBULA', density };
+       }
+    }
+
+    // 5. Absolute Voids: density is zero, no spawn.
+    return { isAsteroidField: density > 0.01, gridType, parentId, density };
   }
 
-  private lastUpdateWorldX = -BigInt(1e18);
-  private lastUpdateWorldY = -BigInt(1e18);
+  public lastWorldInfo: { currentSystem: StarSystem | null } = { currentSystem: null };
+  private lastUpdateWorldX = -1e20;
+  private lastUpdateWorldY = -1e20;
   private lastUpdateZoom = 0;
+  private lastSystemId: string | null = null;
 
+  /**
+   * Обновляет состояние загруженных чанков вокруг заданной позиции.
+   * Переключает мировую сетку при входе/выходе из звездных систем.
+   */
   public update(pos: { sectorX: bigint, sectorY: bigint, offsetX: number, offsetY: number }, worldInfo: { currentSystem: StarSystem | null }, zoom: number = 1.0) {
+    this.lastWorldInfo = worldInfo;
     const secSizeBI = BigInt(SECTOR_SIZE_M);
-    const worldX = pos.sectorX * secSizeBI + BigInt(Math.floor(pos.offsetX));
-    const worldY = pos.sectorY * secSizeBI + BigInt(Math.floor(pos.offsetY));
+    // Maintain precision by breaking down coordinates into chunk steps
+    // Since ASTEROID_CHUNK_SIZE is 1_000_000, we find chunk coordinates easily
+    
+    // Number() casting is completely safe up to 9 quadrillion.
+    const worldX = Number(pos.sectorX * secSizeBI) + pos.offsetX;
+    const worldY = Number(pos.sectorY * secSizeBI) + pos.offsetY;
 
-    // Only update if moved significantly or zoom changed significantly
-    const dx = Number(worldX - this.lastUpdateWorldX);
-    const dy = Number(worldY - this.lastUpdateWorldY);
+    const currentSysId = worldInfo.currentSystem ? worldInfo.currentSystem.id : null;
+    const systemChanged = currentSysId !== this.lastSystemId;
+
+    const dx = Math.abs(worldX - this.lastUpdateWorldX);
+    const dy = Math.abs(worldY - this.lastUpdateWorldY);
     const dz = Math.abs(this.lastUpdateZoom - zoom);
 
-    if (dx*dx + dy*dy < (ASTEROID_CHUNK_SIZE * 0.4) ** 2 && dz < 0.1 && this.loadedChunks.size > 0) {
+    if (!systemChanged && dx < ASTEROID_CHUNK_SIZE * 0.4 && dy < ASTEROID_CHUNK_SIZE * 0.4 && dz < 0.1 && this.loadedChunks.size > 0) {
       return; 
     }
     
+    if (systemChanged) {
+        for (const chunk of this.loadedChunks.values()) {
+            if (this.onChunkUnloaded) this.onChunkUnloaded(chunk);
+        }
+        this.loadedChunks.clear();
+        this.lastSystemId = currentSysId;
+        this.cachedVisibleAsteroids = [];
+    }
+
     this.lastUpdateWorldX = worldX;
     this.lastUpdateWorldY = worldY;
     this.lastUpdateZoom = zoom;
 
-    let radius = 2; // Fixed radius for performance
+    const chunkX = Math.floor(worldX / ASTEROID_CHUNK_SIZE);
+    const chunkY = Math.floor(worldY / ASTEROID_CHUNK_SIZE);
 
-    // Convert player position to axial coords using safe BigInt math before converting to small Numbers
-    const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
-    
-    // axial q = (sqrt(3)/3 * x - 1/3 * y) / size
-    // We do this by scaling up, doing BigInt math, then scaling down
-    // Or simpler: q = (x * 0.57735 - y * 0.33333) / size
-    const x = Number(worldX);
-    const y = Number(worldY);
-    // Even if x is 1e17, x/size is 1e11, which is safe for Number.
-    const { q: pq, r: pr } = getHexCoords(x, y, ASTEROID_CHUNK_SIZE);
-    
+    let radius = 2; 
+
     const neededKeys = new Set<string>();
     
-    for (let dq = -radius; dq <= radius; dq++) {
-      for (let dr = Math.max(-radius, -dq - radius); dr <= Math.min(radius, -dq + radius); dr++) {
-        const q = pq + dq;
-        const r = pr + dr;
-        const key = `${q},${r}`;
+    for (let cx = chunkX - radius; cx <= chunkX + radius; cx++) {
+      for (let cy = chunkY - radius; cy <= chunkY + radius; cy++) {
+        const key = `${cx},${cy}`;
         neededKeys.add(key);
         
         if (!this.loadedChunks.has(key)) {
-          this.loadChunk(q, r, worldInfo, zoom);
-          this.cachedVisibleAsteroids = []; // Invalidate cache on new chunk
+          this.loadChunk(cx, cy, worldInfo);
+          this.cachedVisibleAsteroids = []; // Invalidate cache
         }
       }
     }
@@ -211,101 +328,104 @@ export class AsteroidGridManager {
         const chunk = this.loadedChunks.get(key);
         if (chunk && this.onChunkUnloaded) this.onChunkUnloaded(chunk);
         this.loadedChunks.delete(key);
-        this.cachedVisibleAsteroids = []; // Invalidate cache on chunk removal
+        this.cachedVisibleAsteroids = [];
       }
     }
   }
 
-  private loadChunk(q: number, r: number, worldInfo: { currentSystem: StarSystem | null }, zoom: number = 1.0) {
-    // Keep high precision for chunk centers using BigInt math
-    const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
+  private loadChunk(x: number, y: number, worldInfo: { currentSystem: StarSystem | null }) {
+    const cx = x * ASTEROID_CHUNK_SIZE + (ASTEROID_CHUNK_SIZE / 2);
+    const cy = y * ASTEROID_CHUNK_SIZE + (ASTEROID_CHUNK_SIZE / 2);
     
-    // x = size * sqrt(3) * (q + r/2)
-    const cxBI = (chunkSizeBI * BigInt(Math.floor(Math.sqrt(3) * 1000000)) * BigInt(q) + chunkSizeBI * BigInt(Math.floor(Math.sqrt(3) * 500000)) * BigInt(r)) / 1000000n;
-    // y = size * 3/2 * r
-    const cyBI = chunkSizeBI * 3n * BigInt(r) / 2n;
+    // Find highest density at the corners and center to determine if this chunk spans any asteroid field
+    const pts = [
+        [cx, cy],
+        [cx - ASTEROID_CHUNK_SIZE * 0.45, cy - ASTEROID_CHUNK_SIZE * 0.45],
+        [cx + ASTEROID_CHUNK_SIZE * 0.45, cy - ASTEROID_CHUNK_SIZE * 0.45],
+        [cx - ASTEROID_CHUNK_SIZE * 0.45, cy + ASTEROID_CHUNK_SIZE * 0.45],
+        [cx + ASTEROID_CHUNK_SIZE * 0.45, cy + ASTEROID_CHUNK_SIZE * 0.45],
+        [cx, cy + ASTEROID_CHUNK_SIZE * 0.45],
+        [cx + ASTEROID_CHUNK_SIZE * 0.45, cy],
+    ];
 
-    const cx = Number(cxBI);
-    const cy = Number(cyBI);
-    
-    const { isAsteroidField, gridType, parentId } = this.getAsteroidFieldStrength(cx, cy, worldInfo);
+    let maxDensity = 0;
+    let finalIsField = false;
+    let finalGridType: GridType = 'GLOBAL';
+    let finalParentId = 'GLOBAL';
 
-    const chunk: HexChunk = {
-      q, r, cx, cy, gridType, parentId, isAsteroidField,
-      avgValue: isAsteroidField ? 10000 : 0,
-      avgCount: isAsteroidField ? 2000 : 0,
-      avgRarity: 0.5,
-      avgRegen: 0.01,
-      asteroids: null
+    for(const p of pts) {
+       const str = this.getAsteroidFieldStrength(p[0], p[1], worldInfo);
+       if (str.density > maxDensity) {
+           maxDensity = str.density;
+           finalIsField = str.isAsteroidField;
+           finalGridType = str.gridType;
+           finalParentId = str.parentId;
+       }
+    }
+
+    const chunk: AsteroidChunk = {
+      x, y, cx, cy,
+      gridType: finalGridType,
+      parentId: finalParentId,
+      isAsteroidField: finalIsField,
+      density: maxDensity,
+      asteroids: []
     };
 
-    if (isAsteroidField) {
-      if (this.worker && (zoom > 0.01 || this.pendingChunks.size < 48)) {
-          this.pendingChunks.add(`${q},${r}`);
-          this.worker.postMessage({
-              type: 'GENERATE_CHUNK',
-              id: `${q},${r}`,
-              payload: { q, r, cx, cy, isAsteroidField, isSystem: gridType === 'SYSTEM' }
-          });
-      } else {
-          this.populateAsteroidsForChunk(chunk, cx, cy);
-          if (this.onChunkLoaded) this.onChunkLoaded(chunk);
-      }
-    } else {
+    const chunkKey = `${x},${y}`;
+    this.loadedChunks.set(chunkKey, chunk);
+
+    // Проверяем наличие частично сохраненного чанка
+    const compoundKey = `${finalParentId}_${x}_${y}`;
+    const modified = this.modifiedChunks.get(compoundKey);
+    const thirtyMinutesMs = 30 * 60 * 1000;
+
+    if (modified && (Date.now() - modified.lastModified < thirtyMinutesMs)) {
+       // Восстанавливаем сохранённое состояние со всеми BigInt
+       chunk.asteroids = modified.asteroids.map((ast: any) => ({
+         ...ast,
+         sectorX: BigInt(ast.sectorX),
+         sectorY: BigInt(ast.sectorY),
+       }));
        if (this.onChunkLoaded) this.onChunkLoaded(chunk);
-    }
-    
-    this.loadedChunks.set(`${q},${r}`, chunk);
-  }
+       this.cachedVisibleAsteroids = []; // Сброс кэша видимых объектов
+    } else {
+       if (modified) {
+          // Удаляем просроченный чанк из истории модификаций
+          this.modifiedChunks.delete(compoundKey);
+       }
+       
+       if (finalIsField && maxDensity > 0.01 && this.worker) {
+          let sysPayload = null;
+          if (worldInfo && worldInfo.currentSystem) {
+             const sys = worldInfo.currentSystem;
+             sysPayload = {
+                id: sys.id,
+                sectorX: sys.sectorX.toString(),
+                sectorY: sys.sectorY.toString(),
+                offsetX: sys.offsetX,
+                offsetY: sys.offsetY,
+                sysWorldX: (worldInfo as any).sysWorldX,
+                sysWorldY: (worldInfo as any).sysWorldY,
+                asteroidBelts: sys.asteroidBelts,
+                asteroidClusters: sys.asteroidClusters
+             };
+          }
 
-  private populateAsteroidsForChunk(chunk: HexChunk, cx: number, cy: number) {
-    chunk.asteroids = [];
-    const rng = createRNG(`chunk-${chunk.q}-${chunk.r}`);
-    
-    // Significantly more asteroids per million meter chunk per user request
-    const count = Math.floor(500 + rng() * 4500);
-    
-    for (let i = 0; i < count; i++) {
-        // Exponential distribution for radius: higher exponent makes large ones much rarer
-        // and shifts the bulk of population towards smaller sizes (100-500m)
-        const radius = 100 + Math.pow(rng(), 10) * 4900; 
-        const isPlanetoid = radius > 2500; 
-        const gray = Math.floor(80 + rng() * 120);
-        const color = `rgb(${gray},${gray},${Math.floor(gray * 0.95)})`;
-        
-        const dx = (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 1.1;
-        const dy = (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 1.1;
-        
-        // Use BigInt for world position calculation to keep meters precision
-        const secSizeBI = BigInt(SECTOR_SIZE_M);
-        const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
-        
-        const worldXBI = (BigInt(chunk.q * 2 + chunk.r) * chunkSizeBI * 173205n / 200000n) + BigInt(Math.floor(dx));
-        const worldYBI = BigInt(chunk.r) * chunkSizeBI * 3n / 2n + BigInt(Math.floor(dy));
-        
-        const secX = worldXBI / secSizeBI;
-        const secY = worldYBI / secSizeBI;
-        const oX = Number(worldXBI % secSizeBI);
-        const oY = Number(worldYBI % secSizeBI);
-
-        // Calculate total resource capacity based on volume (r^3)
-        // 100m -> ~1k tons, 1km -> ~1M tons, 5km -> ~125M tons
-        const totalCapacity = Math.floor(Math.pow(radius / 100, 3) * 1000);
-        
-        chunk.asteroids.push({
-           id: `ast-${chunk.q}-${chunk.r}-${i}`,
-           sectorX: secX,
-           sectorY: secY,
-           offsetX: oX,
-           offsetY: oY,
-           rx: Number(worldXBI), // For backward compat but we should use sector info mostly
-           ry: Number(worldYBI),
-           radius,
-           isPlanetoid,
-           color,
-           totalCapacity,
-           resources: makeAsteroidResources(rng, isPlanetoid, chunk.gridType === 'SYSTEM', totalCapacity)
-        });
+          this.worker.postMessage({
+            type: 'GENERATE',
+            payload: {
+               chunkKey,
+               x,
+               y,
+               chunkDensity: maxDensity,
+               gridType: finalGridType,
+               sys: sysPayload
+            }
+          });
+       } else {
+          if (this.onChunkLoaded) this.onChunkLoaded(chunk);
+       }
     }
   }
 
@@ -314,49 +434,64 @@ export class AsteroidGridManager {
   private lastViewMinY = -1e20;
   private lastViewMaxX = -1e20;
   private lastViewMaxY = -1e20;
-
-  public getVisibleAsteroids(viewMinX?: number, viewMinY?: number, viewMaxX?: number, viewMaxY?: number): AsteroidObject[] {
+  private lastViewMinRadius = 0;
+  private lastViewTargetIds = '';
+ 
+  public getVisibleAsteroids(
+      viewMinX?: number, viewMinY?: number, viewMaxX?: number, viewMaxY?: number,
+      minRadius: number = 0, targetId1: string | null = null, targetId2: string | null = null
+  ): AsteroidObject[] {
     const checkBounds = viewMinX !== undefined && viewMaxX !== undefined;
     if (!checkBounds) return this.cachedVisibleAsteroids;
-
-    // Caching loop to prevent massive O(N) iteration 60 times a second
-    // Only re-calculate if camera moved more than 20 meters or significant zoom jump
-    const movementThreshold = 50; 
+ 
+    const viewWidth = viewMaxX! - viewMinX!;
+    const movementThreshold = Math.max(50, viewWidth * 0.05);
+    const targetIdStr = `${targetId1 || ''}-${targetId2 || ''}`;
+    
     if (Math.abs(viewMinX! - this.lastViewMinX) < movementThreshold &&
         Math.abs(viewMinY! - this.lastViewMinY) < movementThreshold &&
         Math.abs(viewMaxX! - this.lastViewMaxX) < movementThreshold &&
+        this.lastViewMinRadius === minRadius &&
+        this.lastViewTargetIds === targetIdStr &&
         this.cachedVisibleAsteroids.length > 0) {
         return this.cachedVisibleAsteroids;
     }
-
+ 
     this.lastViewMinX = viewMinX!;
     this.lastViewMinY = viewMinY!;
     this.lastViewMaxX = viewMaxX!;
     this.lastViewMaxY = viewMaxY!;
-
+    this.lastViewMinRadius = minRadius;
+    this.lastViewTargetIds = targetIdStr;
+ 
     const list: AsteroidObject[] = [];
-    const margin = ASTEROID_CHUNK_SIZE * 2.0; 
-
+    const chunkMargin = (ASTEROID_CHUNK_SIZE * 0.5) + movementThreshold; 
+ 
     for (const chunk of this.loadedChunks.values()) {
-      if (!chunk.asteroids || chunk.asteroids.length === 0) continue;
+      if (chunk.asteroids.length === 0) continue;
       
-      const cx = chunk.cx || 0;
-      const cy = chunk.cy || 0;
-
-      if (cx + margin < viewMinX! || cx - margin > viewMaxX! ||
-          cy + margin < viewMinY! || cy - margin > viewMaxY!) {
+      const cx = chunk.cx;
+      const cy = chunk.cy;
+ 
+      // Fast AABB check for the chunk
+      if (cx + chunkMargin < viewMinX! || cx - chunkMargin > viewMaxX! ||
+          cy + chunkMargin < viewMinY! || cy - chunkMargin > viewMaxY!) {
         continue; 
       }
       
-      const astMargin = 100000; 
+      const astMargin = 100000 + movementThreshold; 
       for (let i = 0; i < chunk.asteroids.length; i++) {
         const ast = chunk.asteroids[i];
         if (ast.depleted) continue;
 
+        if (ast.radius < minRadius && ast.id !== targetId1 && ast.id !== targetId2) {
+            continue;
+        }
+ 
         const ax = ast.rx;
         const ay = ast.ry;
         const ar = ast.radius;
-
+ 
         if (ax + ar < viewMinX! - astMargin || ax - ar > viewMaxX! + astMargin ||
             ay + ar < viewMinY! - astMargin || ay - ar > viewMaxY! + astMargin) {
           continue;
@@ -369,8 +504,7 @@ export class AsteroidGridManager {
     return list;
   }
 
-  public getActiveChunks(): HexChunk[] {
+  public getActiveChunks(): AsteroidChunk[] {
     return Array.from(this.loadedChunks.values()).filter(c => c.isAsteroidField);
   }
-
 }

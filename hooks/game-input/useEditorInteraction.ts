@@ -75,7 +75,9 @@ export const useEditorInteraction = ({
               const twin = draftHull.compartments.find((c: any) => c.id === comp.pairedWith);
               if (twin && twin.points && twin.points.length > 3) {
                 const mirPt = mirrorByPairAxis(p.x, p.y, comp.pairAxis ?? 'X');
-                const twinVi = closestVertexIndex(twin.points, mirPt.x, mirPt.y);
+                const twinVi = (engine as any).activeTwinVertexIndex !== undefined && (engine as any).activeTwinVertexIndex !== null
+                  ? (engine as any).activeTwinVertexIndex
+                  : closestVertexIndex(twin.points, mirPt.x, mirPt.y);
                 if (twinVi >= 0) {
                   twin.points.splice(twinVi, 1);
                   twin.x = twin.points.reduce((s: number, p: any) => s + p.x, 0) / twin.points.length;
@@ -97,6 +99,7 @@ export const useEditorInteraction = ({
             comp.x = comp.points.reduce((s: number, p: any) => s + p.x, 0) / comp.points.length;
             comp.y = comp.points.reduce((s: number, p: any) => s + p.y, 0) / comp.points.length;
             engine.activeCompartmentVertex = null;
+            (engine as any).activeTwinVertexIndex = null;
             setActiveCompartmentVertex(null);
             checkValidation(draftHull);
             setShipHull({ ...draftHull });
@@ -148,7 +151,14 @@ export const useEditorInteraction = ({
       }
     };
 
+    const getTouchCount = () => navigator.maxTouchPoints > 0 ? touchCountRef.current : 0;
+    const touchCountRef = { current: 0 };
+    
+    const onTouchStart = (e: TouchEvent) => { touchCountRef.current = e.touches.length; };
+    const onTouchEnd = (e: TouchEvent) => { touchCountRef.current = e.touches.length; };
+
     const handleMouseDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse' && getTouchCount() > 1) return;
       if (e.target !== canvasRef.current || !engine.isEditorOpen) return;
 
       const now = performance.now();
@@ -596,6 +606,7 @@ export const useEditorInteraction = ({
     };
 
     const handleMouseMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse' && getTouchCount() > 1) return;
       if (!engine.isEditorOpen) return;
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -665,12 +676,20 @@ export const useEditorInteraction = ({
     };
 
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchStart, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', onTouchEnd, { passive: true });
     canvas.addEventListener('pointerdown', handleMouseDown);
     window.addEventListener('pointerup', handleMouseUp);
     window.addEventListener('pointermove', handleMouseMove);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchStart);
+      window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('touchcancel', onTouchEnd);
       canvas.removeEventListener('pointerdown', handleMouseDown);
       window.removeEventListener('pointerup', handleMouseUp);
       window.removeEventListener('pointermove', handleMouseMove);
@@ -861,8 +880,8 @@ function handleCompartmentVertexDrag(worldPos: Point, engine: any, hull: any, mi
 function handleCompartmentDrag(worldPos: Point, engine: any, hull: any) {
   const comp = engine.activeCompartment;
   const off = (engine as any).compartmentDragOffset || { x: 0, y: 0 };
-  const snX = Math.round((worldPos.x + off.x) / 5) * 5; 
-  const snY = Math.round((worldPos.y + off.y) / 5) * 5;
+  const snX = Math.round(worldPos.x + off.x); 
+  const snY = Math.round(worldPos.y + off.y);
   const dx = snX - comp.x; const dy = snY - comp.y;
   if (dx !== 0 || dy !== 0) {
     comp.x = snX; comp.y = snY;

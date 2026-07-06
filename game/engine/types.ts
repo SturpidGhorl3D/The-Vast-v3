@@ -45,7 +45,7 @@ export interface Deck {
 }
 
 export interface Hull {
-  style: 'STEEL' | 'CRYSTAL' | 'ORGANIC';
+  style: string;
   size: number;
   decks: Deck[];
   compartments: Compartment[];

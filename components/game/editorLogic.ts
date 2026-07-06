@@ -78,25 +78,46 @@ export function findMirroredVertexIndices(
 ): number[] {
   const src = points[srcIdx];
   const result: number[] = [];
-  const epsilon = 0.1;
+  const epsilon = 0.5;
 
   if (symHoriz) {
     const tx = -src.x;
     const ty = src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push(idx);
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push(closestId);
   }
   if (symVert) {
     const tx = src.x;
     const ty = -src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && !result.includes(i) && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push(idx);
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx && !result.includes(i)) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push(closestId);
   }
   if (symHoriz && symVert) {
     const tx = -src.x;
     const ty = -src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && !result.includes(i) && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push(idx);
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx && !result.includes(i)) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push(closestId);
   }
 
   return result;
@@ -128,25 +149,46 @@ export function resolveMirrorTargets(
 ): MirrorTarget[] {
   const src = points[srcIdx];
   const result: MirrorTarget[] = [];
-  const epsilon = 0.1;
+  const epsilon = 0.5;
 
   if (symHoriz) {
     const tx = -src.x;
     const ty = src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push({ index: idx, mirrorType: 'X' });
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push({ index: closestId, mirrorType: 'X' });
   }
   if (symVert) {
     const tx = src.x;
     const ty = -src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push({ index: idx, mirrorType: 'Y' });
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx && !result.map(r => r.index).includes(i)) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push({ index: closestId, mirrorType: 'Y' });
   }
   if (symHoriz && symVert) {
     const tx = -src.x;
     const ty = -src.y;
-    const idx = points.findIndex((p, i) => i !== srcIdx && Math.abs(p.x - tx) < epsilon && Math.abs(p.y - ty) < epsilon);
-    if (idx !== -1) result.push({ index: idx, mirrorType: 'XY' });
+    let closestId = -1;
+    let bestD = epsilon;
+    points.forEach((p, i) => {
+      if (i !== srcIdx && !result.map(r => r.index).includes(i)) {
+        const d = Math.hypot(p.x - tx, p.y - ty);
+        if (d < bestD) { bestD = d; closestId = i; }
+      }
+    });
+    if (closestId !== -1) result.push({ index: closestId, mirrorType: 'XY' });
   }
 
   return result;

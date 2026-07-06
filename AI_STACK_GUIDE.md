@@ -4,9 +4,11 @@
 **THE VAST** is a high-performance 2D space simulation game with procedural generation, an ECS (Entity Component System) architecture, and complex logistics, economy, and ship-building elements.
 
 ### Tech Stack
-- **Framework**: Next.js 15 (App Router)
+- **Framework**: Vite (Custom Express + Socket.io server)
 - **UI**: React 19, Tailwind CSS v4
-- **Rendering**: Babylon.js (Core) / WebGPU with custom Shaders (`WorldRenderer.ts`, `CelestialRenderer.ts`, `Graphics2D.ts`) 
+- **Rendering**: Babylon.js (Core) / WebGPU with custom Shaders. 
+  - **Instanced GPU Rendering**: Orbits, Rings, and large Celestial bodies are rendered via **Thin Instances** on the GPU to bypass CPU triangulation bottlenecks.
+  - **Procedural Shaders**: Asteroid textures, planetary surfaces, and cosmic density haze are generated in custom fragment shaders.
 - **Networking**: `socket.io-client` for Multiplayer State Sync
 - **Geometry/Math**: `d3-delaunay`, `earcut`, `simplex-noise`, `polygon-clipping`
 - **State Management**: Custom React Hooks interfacing with the ECS (`GameCore`, `GameEngine`)
@@ -99,7 +101,13 @@ Because `Entity` types are represented by numbers implicitly, an entity with ID 
 
 ### Procedural Generation (World & Ships)
 - **NPC Ships (`proceduralShipGenerator.ts`)**: Procedural DNA algorithm (`/ship_generator/dna.ts`) combining skeletons and assigning logical module layouts purely through algorithmic weighting based on NPC Faction preferences.
-- **World & Resources**: `StarSystemGenerator` + `AsteroidGridManager` partition the universe into star systems with distinct gravitational bodies and resources.
+- **World & Procedural Asteroids (`AsteroidGridManager.ts` & `WorldRenderer.ts`)**:
+  - **Modular Density Estimator**: Asteroid field presence is calculated through modular physical laws:
+    - *System Belts (Toroidal Rings)*: Structured continuous Gaussian radial distribution (`density = exp(-(dist - Rc)^2 / 2*sigma^2)`) to eliminate simplex holes and maintain solid continuous rings. All belts (both inner planetary and outer Oort rings) are accurately matched within the star system's gravisphere.
+    - *Orbital Clusters (Density Pockets)*: Gravitational pull centers with radial decay, utilizing mid-frequency noise exclusively for turbulent boundary distortions rather than structural cutout.
+    - *Deep Space & Oort Topology*: Outside the star's $250 \text{ AU}$ planetary limit, the background Oort cloud halo is blended smoothly with exponential decay alongside global galactic nebulas and dense rogue pockets.
+  - **Lazy Zoom Loading & Chunk Synchronization**: Prevents zoomed-out rendering from caching empty asteroid zones. Chunks loaded while zoomed out are stored with structural attributes. Once zoomed in (`zoom > 0.01`), asteroid records are dynamically populated via the dedicated asset worker (`asteroid.worker.ts`), maintaining correct coordinate transformations without performance degradation.
+  - **Screen-Space Noise-Estimator (Low-Res CPU Haze)**: Avoids heavy per-pixel GPU math or float32 coordinate jitter. The CPU samples a low-resolution grid (`32x32`) of the screen's visible world coordinates via `getAsteroidFieldStrength(cx, cy, worldInfo)`, mapping densities directly to a tiny dynamic raw texture Alpha channel with bilinear filtering. Updates are throttled to 20ms+ and trigger mainly on significant camera movement or zoom, providing a fluid background visual without blocking the main thread.
 
 ### Tech Tree & Research (`TechnologyWindow.tsx`)
 - Research operates over time based on active computational allocation (Labs).

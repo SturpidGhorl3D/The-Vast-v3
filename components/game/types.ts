@@ -143,6 +143,8 @@ export interface MiningConfig {
   mount?: 'DORSAL' | 'VENTRAL' | 'NONE';
   barrelCount?: number;
   visual?: TurretVisualConfig;
+  generalExtractionModifier?: number;
+  targetExtractionModifier?: number;
 }
 
 export interface Compartment {

@@ -299,7 +299,7 @@ export default function EditorUI({
                    activeDeck={activeDeck}
                    setActiveDeck={setActiveDeck}
                    selectionType={selectionType}
-                   setSelectionType={setSelectionType}
+                   setSelectionType={setSelectionType} researchedTechs={researchedTechs} isCreative={isCreative}
                    setSelectedElementIndex={setSelectedElementIndex}
                    setInternalView={setInternalView}
                    resources={resources}
@@ -453,9 +453,9 @@ export default function EditorUI({
                     activeDeck={activeDeck}
                     setShipHull={setShipHull}
                     engine={engine}
-                    px={px}
                     researchedTechs={researchedTechs}
                     isCreative={isCreative}
+                    px={px}
                   />
                 </div>
               )}

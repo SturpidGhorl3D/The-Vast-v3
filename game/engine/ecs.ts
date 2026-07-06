@@ -52,22 +52,34 @@ export class ECS {
     this.queryCache.clear(); // Simple invalidation
   }
 
-  getEntitiesWith(componentNames: string[]): Entity[] {
+  // Precompute keys for common queries to avoid array and string allocations
+  private static readonly MOVEMENT_QUERY = 'Position,Velocity';
+  private static readonly RENDER_QUERY = 'Position,Hull';
+
+  getEntitiesWith(componentNames: string[], queryKeyHint?: string): Entity[] {
     if (componentNames.length === 0) return Array.from(this.entities);
 
-    const queryKey = componentNames.join(',');
+    const queryKey = queryKeyHint || componentNames.join(',');
     if (this.queryCache.has(queryKey)) {
         return this.queryCache.get(queryKey)!;
     }
 
     const firstStore = this.components.get(componentNames[0]);
-    if (!firstStore) return [];
+    if (!firstStore) {
+        this.queryCache.set(queryKey, []);
+        return [];
+    }
 
-    let result = Array.from(firstStore.keys());
-    for (let i = 1; i < componentNames.length; i++) {
-      const store = this.components.get(componentNames[i]);
-      if (!store) return [];
-      result = result.filter(e => store.has(e));
+    let result: Entity[] = [];
+    for (const e of firstStore.keys()) {
+        let hasAll = true;
+        for (let i = 1; i < componentNames.length; i++) {
+            if (!this.components.get(componentNames[i])?.has(e)) {
+                hasAll = false;
+                break;
+            }
+        }
+        if (hasAll) result.push(e);
     }
     
     this.queryCache.set(queryKey, result);

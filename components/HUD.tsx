@@ -14,6 +14,8 @@ interface HUDProps {
   onScanSystem: () => void;
   maxCapacity: number;
   resources: Record<string, number>;
+  hasCargoManagement?: boolean;
+  onJettisonCargo?: (resourceId: string, amount: number) => void;
   warpTarget: any;
   cooldownLeft: number;
   viewMode: ViewMode;
@@ -54,6 +56,8 @@ export default function HUD({
   onScanSystem,
   maxCapacity,
   resources,
+  hasCargoManagement,
+  onJettisonCargo,
   warpTarget,
   cooldownLeft,
   viewMode,
@@ -207,9 +211,20 @@ export default function HUD({
                   {Object.entries(resources)
                     .filter(([id, amount]) => id !== 'maxCapacity' && typeof amount === 'number' && amount > 0.01)
                     .map(([id, amount]) => (
-                      <div key={id} className="flex justify-between text-[9px]">
+                      <div key={id} className="flex items-center justify-between text-[9px] group/item">
                         <span className="opacity-60">{id.charAt(0) + id.slice(1).toLowerCase()}</span>
-                        <span className="text-blue-300">{Math.floor(amount as number)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-blue-300">{Math.floor(amount as number)}</span>
+                          {hasCargoManagement && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onJettisonCargo && onJettisonCargo(id, amount as number); }}
+                              className="text-red-500 opacity-50 hover:opacity-100 transition-opacity px-1 hover:bg-red-500/20 rounded ml-2"
+                              title="Выбросить все"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
                       </div>
                     ))}
                 </div>

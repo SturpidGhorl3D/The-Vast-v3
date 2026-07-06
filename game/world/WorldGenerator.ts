@@ -40,12 +40,9 @@ export class WorldGenerator {
     if (clusterRadius !== undefined) this.clusterRadiusCells = clusterRadius;
     if (density !== undefined) this.densityMultiplier = density;
     
-    const s0 = hashString(seed);
-    const s1 = hashString(seed + '_oct2');
-    const s2 = hashString(seed + '_oct3');
-    this.noise2D   = createNoise2D(() => s0);
-    this.noise2D_b = createNoise2D(() => s1);
-    this.noise2D_c = createNoise2D(() => s2);
+    this.noise2D   = createNoise2D(createRNG(seed + '_oct1'));
+    this.noise2D_b = createNoise2D(createRNG(seed + '_oct2'));
+    this.noise2D_c = createNoise2D(createRNG(seed + '_oct3'));
     this.systemGenerator = new StarSystemGenerator(seed, this.noise2D);
 
     this.initializeProceduralFactions();

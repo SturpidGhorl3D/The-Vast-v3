@@ -460,7 +460,9 @@ export function makeDefaultCompartmentExtras(type: CompartmentType): Partial<Com
           level: 0, 
           mount: 'DORSAL', 
           barrelCount: 1, 
-          visual: JSON.parse(JSON.stringify(defaultTurretVisual)) 
+          visual: JSON.parse(JSON.stringify(defaultTurretVisual)),
+          generalExtractionModifier: 0.75,
+          targetExtractionModifier: 0.50
         }
       };
     case 'REACTOR':

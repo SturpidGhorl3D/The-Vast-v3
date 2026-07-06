@@ -117,97 +117,16 @@ function normalizeAngle(a: number) {
 
 function fireWeapon(ecs: ECS, engine: GameEngine, owner: Entity, weapon: Weapon) {
     weapon.lastFireTime = Date.now();
-    const playerPos = ecs.getPosition(owner)!;
-    const hull = ecs.getHull(owner)!;
-    const weaponPos = getTurretWorldPos(playerPos, hull, weapon.turretId);
-    const bType = weapon.group === 'MAIN' ? 0 : (weapon.group === 'SECONDARY' ? 1 : 2);
     
     switch (weapon.fireMode) {
         case 'ROUNDS':
-            spawnBallistic(ecs, engine, owner, weaponPos, weapon, playerPos.angle + weapon.turretAngle, bType);
             audioManager.playProjectileSFX();
             break;
         case 'HOMING':
-             spawnHoming(ecs, engine, owner, weaponPos, weapon, playerPos.angle + weapon.turretAngle, bType);
              audioManager.playRocketSFX();
              break;
         case 'BEAM':
-             spawnBeam(ecs, engine, owner, weaponPos, weapon, playerPos.angle + weapon.turretAngle, bType);
              audioManager.playBeamSFX();
              break;
-    }
-}
-
-function spawnBallistic(ecs: ECS, engine: GameEngine, owner: Entity, weaponPos: {x: number, y: number}, weapon: Weapon, absoluteAngle: number, bType: number) {
-    const playerPos = ecs.getPosition(owner)!;
-    // Calculate world position
-    const worldX = Number(playerPos.sectorX) * SECTOR_SIZE_M + weaponPos.x;
-    const worldY = Number(playerPos.sectorY) * SECTOR_SIZE_M + weaponPos.y;
-
-    for (let i = 0; i < weapon.barrelCount; i++) {
-        const spread = (Math.random() - 0.5) * 0.02;
-        const angle = absoluteAngle + spread;
-        
-        const vx = Math.cos(angle) * weapon.projectileSpeed;
-        const vy = Math.sin(angle) * weapon.projectileSpeed;
-
-        engine.projectiles.spawn(
-            worldX,
-            worldY,
-            vx,
-            vy,
-            weapon.damage,
-            weapon.range,
-            owner,
-            bType,
-            0 // BALLISTIC
-        );
-    }
-}
-
-function spawnHoming(ecs: ECS, engine: GameEngine, owner: Entity, weaponPos: {x: number, y: number}, weapon: Weapon, absoluteAngle: number, bType: number) {
-    const playerPos = ecs.getPosition(owner)!;
-    const worldX = Number(playerPos.sectorX) * SECTOR_SIZE_M + weaponPos.x;
-    const worldY = Number(playerPos.sectorY) * SECTOR_SIZE_M + weaponPos.y;
-
-    for (let i = 0; i < weapon.barrelCount; i++) {
-        const vx = Math.cos(absoluteAngle) * weapon.projectileSpeed * 0.5;
-        const vy = Math.sin(absoluteAngle) * weapon.projectileSpeed * 0.5;
-
-        engine.projectiles.spawn(
-            worldX,
-            worldY,
-            vx,
-            vy,
-            weapon.damage,
-            weapon.range,
-            owner,
-            bType,
-            2 // HOMING
-        );
-    }
-}
-
-function spawnBeam(ecs: ECS, engine: GameEngine, owner: Entity, weaponPos: {x: number, y: number}, weapon: Weapon, absoluteAngle: number, bType: number) {
-    const playerPos = ecs.getPosition(owner)!;
-    const worldX = Number(playerPos.sectorX) * SECTOR_SIZE_M + weaponPos.x;
-    const worldY = Number(playerPos.sectorY) * SECTOR_SIZE_M + weaponPos.y;
-
-    for (let i = 0; i < weapon.barrelCount; i++) {
-        // Beam travels very fast
-        const vx = Math.cos(absoluteAngle) * weapon.projectileSpeed * 2;
-        const vy = Math.sin(absoluteAngle) * weapon.projectileSpeed * 2;
-
-        engine.projectiles.spawn(
-            worldX,
-            worldY,
-            vx,
-            vy,
-            weapon.damage,
-            weapon.range,
-            owner,
-            bType,
-            1 // BEAM
-        );
     }
 }

@@ -25,6 +25,10 @@ export function useEditorOperations(engine: any, setIsEditorOpen: (v: boolean) =
 
   const applyChanges = () => {
     if (!engine) return;
+    if (isCreative) {
+      window.dispatchEvent(new Event('exit-creative-mode'));
+      return;
+    }
     const player = engine.player;
     if (player !== null && engine.draftHull) {
       const draftHull = engine.draftHull;
@@ -131,6 +135,10 @@ export function useEditorOperations(engine: any, setIsEditorOpen: (v: boolean) =
 
   const cancelEditor = () => {
     if (!engine) return;
+    if (isCreative) {
+      window.dispatchEvent(new Event('exit-creative-mode'));
+      return;
+    }
     const player = engine.player;
     if (player !== null) {
       const pos = engine.ecs.getComponent(player, 'Position');

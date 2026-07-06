@@ -90,7 +90,7 @@ export interface Satellite {
 export interface PlanetaryRing {
   innerRadius: number;
   outerRadius: number;
-  thickness: number;
+  thickness?: number;
   color: string;
   isAsteroids?: boolean; // if true, render as an asteroid belt visually
 }
@@ -160,19 +160,21 @@ export interface AsteroidCluster {
   offsetX: number;
   offsetY: number;
   radius: number;
-  clusterOffsetX: number;
-  clusterOffsetY: number;
+  clusterOffsetX?: number;
+  clusterOffsetY?: number;
   density: number;
-  isRing: boolean;
+  isRing?: boolean;
   ringInnerRadius?: number;
   ringOuterRadius?: number;
-  inSystem: boolean;
-  boundaryPoints: { x: number; y: number }[];
-  resources: { [key: string]: number };
-  visualCount: number;
-  scaleX: number;
-  scaleY: number;
-  rotation: number;
+  inSystem?: boolean;
+  boundaryPoints?: { x: number; y: number }[];
+  resources?: { [key: string]: number };
+  visualCount?: number;
+  scaleX?: number;
+  scaleY?: number;
+  rotation?: number;
+  orbitRadius?: number;
+  orbitAngle?: number;
 }
 
 export type GridType = 'GLOBAL' | 'SYSTEM' | 'PLANETARY';
@@ -185,6 +187,7 @@ export interface HexChunk {
   gridType: GridType;
   parentId: string; // "GLOBAL", "sys-{id}", or "planet-{id}"
   isAsteroidField: boolean;
+  density?: number;
   avgValue: number;
   avgCount: number;
   avgRarity: number;

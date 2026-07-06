@@ -174,6 +174,7 @@ export function useGameStateSync({
     setActiveResearch,
     setAvailableTechOptions,
     setPendingInnovationChoices,
+    setPendingBranchChoices,
     setNodePositions,
     setBranchingCounts,
     setProductionTick,

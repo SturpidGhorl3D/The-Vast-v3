@@ -379,8 +379,12 @@ export class ShipRenderer extends BaseRenderer {
         if (headRot === 0 && comp.isMiningActive && comp.miningTargetPos) {
            const headPivotLocal = vs.headAttachmentPoint || { x: 0, y: 0 };
            const pivotGlobal = this.getGlobalPos(headPivotLocal.x * vs.scale, headPivotLocal.y * vs.scale, baseCx, baseCy, 0);
-           const dx = comp.miningTargetPos.offsetX - (coords.offsetX + (pivotGlobal.x * Math.cos(angle) - pivotGlobal.y * Math.sin(angle)));
-           const dy = comp.miningTargetPos.offsetY - (coords.offsetY + (pivotGlobal.x * Math.sin(angle) + pivotGlobal.y * Math.cos(angle)));
+           
+           const tgtRel = camera.getEngineCoords(comp.miningTargetPos);
+           const srcRel = camera.getEngineCoords(coords);
+           const dx = tgtRel.x - (srcRel.x + (pivotGlobal.x * Math.cos(angle) - pivotGlobal.y * Math.sin(angle)));
+           const dy = tgtRel.y - (srcRel.y + (pivotGlobal.x * Math.sin(angle) + pivotGlobal.y * Math.cos(angle)));
+           
            headRot = Math.atan2(dy, dx) - angle;
            
            beamTargetScreen = camera.worldToScreen(comp.miningTargetPos, width, height);
@@ -432,6 +436,20 @@ export class ShipRenderer extends BaseRenderer {
         });
     };
     
+    // Gradient color helper
+    const getGradientColor = (baseColorNum: number, idx: number, totalDecks: number) => {
+        if (totalDecks <= 1) return baseColorNum;
+        const r = (baseColorNum >> 16) & 255;
+        const g = (baseColorNum >> 8) & 255;
+        const b = baseColorNum & 255;
+        // From -0.2 (bottom) to +0.2 (top)
+        const factor = -0.3 + 0.6 * (idx / (totalDecks - 1));
+        const adjust = (c: number) => Math.max(0, Math.min(255, c + c * factor)) | 0;
+        return (adjust(r) << 16) | (adjust(g) << 8) | adjust(b);
+    };
+
+    const compsToDraw = isAnimating ? anim.oldCompartments : compsList;
+
     decksToDraw.forEach((deck: any, idx: number) => {
       compsList.forEach((comp: any) => {
          const tc = comp.turretConfig || comp.miningConfig;
@@ -450,20 +468,21 @@ export class ShipRenderer extends BaseRenderer {
       // Editor ghosting logic
       let alpha = 1;
       let isGhost = false;
+      let isDeckAbove = false;
+      
       if (isEditor && !isAnimating) {
         if (idx === activeIdx) {
           alpha = 1;
-        } else if (idx === activeIdx - 1) {
-          alpha = 1.0; // Deck below - Opaque as requested
+        } else if (idx < activeIdx) {
+          alpha = 1.0; 
           isGhost = true;
         } else if (idx === activeIdx + 1) {
-          alpha = 0.4; // Deck above - semi-transparent
+          alpha = 0.2; 
+          isDeckAbove = true;
           isGhost = true;
         } else {
-          return; // Don't draw other decks
+          return; 
         }
-      } else if (isEditor && hull.activeDeckIndex !== undefined && idx !== hull.activeDeckIndex) {
-        return;
       }
       
       let pts = deck.points;
@@ -505,32 +524,46 @@ export class ShipRenderer extends BaseRenderer {
       }
       this.graphics.closePath();
       
-      let color = this.colorToNumber(deck.color);
+      let baseColorNum = this.colorToNumber(deck.color);
+      baseColorNum = getGradientColor(baseColorNum, idx, decksToDraw.length);
+      let color = baseColorNum;
+      
       if (isAnimating) color = 0x888888; 
-      if (isGhost) color = 0x444444; // Darken ghost decks
+      else if (isEditor && isGhost && idx < activeIdx) {
+          // Keep hull color but slightly darker to distinguish it as non-active
+          const r = (color >> 16) & 255;
+          const g = (color >> 8) & 255;
+          const b = color & 255;
+          color = ((r * 0.7) << 16) | ((g * 0.7) << 8) | (b * 0.7);
+      }
       
       const baseAlpha = deck.isBuilding ? 0.3 + (deck.buildProgress || 0) * 0.7 : 1;
+      // Placeholder for future texture implementation
+      // if (deck.textureId) { applyTexture(deck.textureId, pts); }
       this.graphics.fill({ color, alpha: baseAlpha * alpha });
       
       // Draw hull thickness border if applicable
       const thickness = deck.globalHullThickness || 0;
       if (thickness > 0) {
         // Use a darker version of the deck color or a metallic grey for the hull plating
-        const hullColor = this.colorToNumber(deck.color);
-        // Make it slightly darker for contrast but keep it solid (alpha 1 if alpha is 1)
-        this.graphics.stroke({ color: hullColor, width: Math.max(2, thickness * camera.zoom), alpha: 1.0 * alpha, join: 'round' });
+        this.graphics.stroke({ color: baseColorNum, width: Math.max(2, thickness * camera.zoom), alpha: 1.0 * alpha, join: 'round' });
       } else {
-        this.graphics.stroke({ color: isAnimating ? 0xaaaaaa : 0x333333, width: 1, alpha: 0.3 * alpha, join: 'round' });
+        this.graphics.stroke({ color: baseColorNum, width: 1, alpha: 0.3 * alpha, join: 'round' });
       }
 
       // Draw Beams and Armor in Internal View / Editor
-      if ((internalView || isEditor) && idx === activeIdx) {
+      const shouldDrawInternalStructure = (internalView && !isDeckAbove) || (isEditor && idx === activeIdx);
+      if (shouldDrawInternalStructure) {
+        // Overlay a very dark tint on the entire active deck to make the internal structure deeply shaded
+        this.graphics.fill({ color: 0x000000, alpha: 0.65 });
+        
         // ... (Joint Marker drawing helper stays)
         const drawJointMarker = (p: any) => {
+          if (!this.fxGraphics) return;
           const s = 4;
-          this.graphics.moveTo(p.x - s, p.y); this.graphics.lineTo(p.x + s, p.y);
-          this.graphics.moveTo(p.x, p.y - s); this.graphics.lineTo(p.x, p.y + s);
-          this.graphics.stroke({ color: 0x444444, width: 2, alpha: 0.8 });
+          this.fxGraphics.moveTo(p.x - s, p.y); this.fxGraphics.lineTo(p.x + s, p.y);
+          this.fxGraphics.moveTo(p.x, p.y - s); this.fxGraphics.lineTo(p.x, p.y + s);
+          this.fxGraphics.stroke({ color: baseColorNum, width: 2, alpha: 0.8 });
         };
 
         // 1. Draw Armor Plates (Cells)
@@ -546,16 +579,28 @@ export class ShipRenderer extends BaseRenderer {
               const isSelectedCell = engine?.activeCell?.id === cell.id;
               if (isArmor) {
                 // Armor visual: Darker metallic plates with inherit color support
-                let armorColor = 0x22222a; // Default dark armor
+                let armorColor = 0x111115; // Default even darker armor
                 if (cell.inheritsHullColor) {
-                  armorColor = this.colorToNumber(deck.color);
+                  const ar = (baseColorNum >> 16) & 255;
+                  const ag = (baseColorNum >> 8) & 255;
+                  const ab = baseColorNum & 255;
+                  armorColor = ((ar * 0.4) << 16) | ((ag * 0.4) << 8) | (ab * 0.4);
                 }
-                this.graphics.fill({ color: armorColor, alpha: 0.8 });
-                this.graphics.stroke({ color: isSelectedCell ? 0xffff00 : 0x555566, width: isSelectedCell ? 2 : 1, alpha: isSelectedCell ? 1.0 : 0.6 });
+                // Placeholder for cell texture: if (cell.textureId) { ... }
+                this.graphics.fill({ color: armorColor, alpha: 0.9 });
+                this.graphics.stroke({ color: baseColorNum, width: 1, alpha: 0.6 });
               } else {
                 // Regular structural cell (void space filler)
-                this.graphics.fill({ color: 0x666666, alpha: 0.3 });
-                this.graphics.stroke({ color: isSelectedCell ? 0xff00ff : 0x888888, width: isSelectedCell ? 2 : 1, alpha: isSelectedCell ? 1.0 : 0.2 });
+                // Placeholder for structural cell texture: if (cell.textureId) { ... }
+                this.graphics.fill({ color: 0x050505, alpha: 0.6 });
+                this.graphics.stroke({ color: baseColorNum, width: 1, alpha: 0.3 });
+              }
+              
+              if (isSelectedCell && this.fxGraphics) {
+                 this.fxGraphics.moveTo(cpts[0].x, cpts[0].y);
+                 for (let i = 1; i < cpts.length; i++) this.fxGraphics.lineTo(cpts[i].x, cpts[i].y);
+                 this.fxGraphics.closePath();
+                 this.fxGraphics.stroke({ color: isArmor ? 0xffff00 : 0xff00ff, width: 2, alpha: 1.0 });
               }
             }
           });
@@ -570,7 +615,7 @@ export class ShipRenderer extends BaseRenderer {
             this.graphics.moveTo(p1.x, p1.y);
             this.graphics.lineTo(p2.x, p2.y);
           });
-          this.graphics.stroke({ color: 0x333333, width: 1, alpha: 0.8 });
+          this.graphics.stroke({ color: baseColorNum, width: 1, alpha: 0.5 });
         }
 
         // 3. Draw Joint Markers (Pluses)
@@ -581,46 +626,74 @@ export class ShipRenderer extends BaseRenderer {
           });
         }
         screenPts.forEach(drawJointMarker);
-        hull.compartments.forEach((comp: any) => {
+        compsList.forEach((comp: any) => {
           if (comp.points && comp.startDeck <= activeIdx && comp.endDeck >= activeIdx) {
             comp.points.forEach((p: any) => drawJointMarker(toScreen(p)));
           }
         });
       }
-    });
 
-    if (internalView || isEditor) {
-      const compsToDraw = isAnimating ? anim.oldCompartments : hull.compartments;
-      compsToDraw.forEach((comp: any) => {
-        if (!comp.points || comp.points.length < 3) return;
-        if (isEditor && hull.activeDeckIndex !== undefined) {
-          const s = Math.min(comp.startDeck, comp.endDeck);
+      // Draw compartments that belong to this deck (to ensure proper depth sorting behind higher decks)
+      if (internalView || isEditor) {
+        compsToDraw.forEach((comp: any) => {
+          if (!comp.points || comp.points.length < 3) return;
           const e = Math.max(comp.startDeck, comp.endDeck);
-          if (s > hull.activeDeckIndex || e < hull.activeDeckIndex) return;
-        }
-        const pts = comp.points.map((p: any) => {
-          const rx = p.x * camera.zoom;
-          const ry = p.y * camera.zoom;
-          const rotX = rx * Math.cos(shipRotation) - ry * Math.sin(shipRotation);
-          const rotY = rx * Math.sin(shipRotation) + ry * Math.cos(shipRotation);
-          return { x: screenX + rotX, y: screenY + rotY };
+          
+          let shouldDraw = false;
+          if (isEditor && hull.activeDeckIndex !== undefined) {
+             const s = Math.min(comp.startDeck, comp.endDeck);
+             if (s > hull.activeDeckIndex) return; // Completely hidden
+             // Draw the compartment only on its topmost visible layer (either its true endDeck or the activeDeck if it extends above)
+             const topVisibleDeck = Math.min(e, hull.activeDeckIndex);
+             if (idx === topVisibleDeck) shouldDraw = true;
+          } else {
+             if (idx === e) shouldDraw = true;
+          }
+
+          if (shouldDraw) {
+            const pts = comp.points.map((p: any) => {
+              const rx = p.x * camera.zoom;
+              const ry = p.y * camera.zoom;
+              const rotX = rx * Math.cos(shipRotation) - ry * Math.sin(shipRotation);
+              const rotY = rx * Math.sin(shipRotation) + ry * Math.cos(shipRotation);
+              return { x: screenX + rotX, y: screenY + rotY };
+            });
+            this.graphics.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length; i++) {
+              this.graphics.lineTo(pts[i].x, pts[i].y);
+            }
+            this.graphics.closePath();
+            
+            const colorNum = this.colorToNumber(comp.color);
+            const r = (colorNum >> 16) & 255;
+            const g = (colorNum >> 8) & 255;
+            const b = colorNum & 255;
+            const darkColor = ((r * 0.3) << 16) | ((g * 0.3) << 8) | (b * 0.3);
+
+            const compAlpha = comp.isBuilding ? 0.3 + (comp.buildProgress || 0) * 0.7 : (isDeckAbove ? 0.4 : 0.85); // Ghost above compartments too just in case
+            
+            // Placeholder for future compartment texture: if (comp.textureId) { ... }
+            // Fill the floor with a much darker tone
+            this.graphics.fill({ color: darkColor, alpha: compAlpha });
+            
+            // Draw the thin wall illuminated by the deck color (baseColorNum), as requested
+            const wallThickness = 2; // Thin lines in screen space, not scaled by zoom
+            this.graphics.stroke({ color: baseColorNum, width: wallThickness, alpha: compAlpha, join: 'round' });
+            
+            // Inner thin line to give more structure
+            this.graphics.stroke({ color: 0x000000, width: 1, alpha: 0.6 });
+            
+            const isSelected = activeCompartment?.id === comp.id || (activeCompartment && comp.pairedWith === activeCompartment.id) || (activeCompartment?.pairedWith === comp.id);
+            if (isSelected && this.fxGraphics) {
+              this.fxGraphics.moveTo(pts[0].x, pts[0].y);
+              for (let i = 1; i < pts.length; i++) this.fxGraphics.lineTo(pts[i].x, pts[i].y);
+              this.fxGraphics.closePath();
+              this.fxGraphics.stroke({ color: 0xffff00, width: wallThickness + 2, alpha: 1.0 });
+            }
+          }
         });
-        this.graphics.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) {
-          this.graphics.lineTo(pts[i].x, pts[i].y);
-        }
-        this.graphics.closePath();
-        const color = this.colorToNumber(comp.color);
-        this.graphics.fill({ color, alpha: comp.isBuilding ? 0.3 + (comp.buildProgress || 0) * 0.7 : 0.8 });
-        
-        const isSelected = activeCompartment?.id === comp.id || (activeCompartment && comp.pairedWith === activeCompartment.id) || (activeCompartment?.pairedWith === comp.id);
-        if (isSelected) {
-          this.graphics.stroke({ color: 0xffff00, width: 2, alpha: 1.0 });
-        } else {
-          this.graphics.stroke({ color: 0x000000, width: 1, alpha: 0.3 });
-        }
-      });
-    }
+      }
+    });
 
     // Draw Dorsal turrets after compartments
     compsList.forEach((comp: any) => {
@@ -628,7 +701,12 @@ export class ShipRenderer extends BaseRenderer {
        if (tc && tc.mount === 'DORSAL') {
           if (isEditor) {
              const isCurrentDeck = comp.startDeck <= activeIdx && comp.endDeck >= activeIdx;
-             if (!isCurrentDeck) return; 
+             if (!isCurrentDeck) {
+                if (comp.startDeck < activeIdx) {
+                   drawTurret(comp, 0.4, false); // Draw opaquely-visible but partially transparent for decks below
+                }
+                return; 
+             }
              // Always show faint mount-only in editor to avoid blocking hull/compartment editing
              drawTurret(comp, 0.3, true); 
           } else {

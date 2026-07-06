@@ -1,5 +1,5 @@
 import { createNoise2D } from 'simplex-noise';
-import { hashString } from './utils';
+import { hashString, createRNG } from './utils';
 import { makeAsteroidResources } from './AsteroidGenerator';
 
 const ASTEROID_CHUNK_SIZE = 1_000_000; 
@@ -113,18 +113,18 @@ self.onmessage = (e: MessageEvent) => {
 
   if (type === 'INIT') {
     seedStr = payload.seed;
-    noise2D = createNoise2D(() => hashString(seedStr));
+    noise2D = createNoise2D(createRNG(seedStr + '_oct1'));
     self.postMessage({ type: 'INIT_DONE', id });
   } 
   
   else if (type === 'GENERATE_CHUNK') {
     if (!noise2D) return;
-    const { q, r, cx, cy, isAsteroidField, isSystem } = payload;
+    const { q, r, cx, cy, isAsteroidField, density, isSystem } = payload;
     
     // Seeded random for this specific chunk
     const rngSeed = hashString(`${seedStr}_chunk_${q}_${r}`);
-    let m_w = rngSeed;
-    let m_z = 987654321;
+    let m_w = rngSeed || 1; // Prevent 0
+    let m_z = hashString(`${seedStr}_chunk_z_${q}_${r}`) || 987654321;
     const rng = () => {
         m_z = (36969 * (m_z & 65535) + (m_z >> 16)) & 0xffffffff;
         m_w = (18000 * (m_w & 65535) + (m_w >> 16)) & 0xffffffff;
@@ -132,9 +132,15 @@ self.onmessage = (e: MessageEvent) => {
         return res / 2147483648;
     };
 
-    // Increased count to matches AsteroidGridManager's intended density
-    // User requested doubling: min 2k, max 10k
-    const count = Math.floor(2000 + rng() * 8000); 
+    // Scale asteroid count tightly to density.
+    // Ensure we don't spawn empty chunks unless density is practically 0
+    let count = 0;
+    if (isAsteroidField && density > 0.01) {
+        const baseCount = 2000 + rng() * 8000;
+        // Apply an easing curve so lower density fields thin out smoothly
+        count = Math.floor(baseCount * Math.pow(density, 0.75));
+    }
+    
     const asteroids = [];
     
     for (let i = 0; i < count; i++) {
@@ -143,25 +149,34 @@ self.onmessage = (e: MessageEvent) => {
         const gray = Math.floor(80 + rng() * 120);
         const color = `rgb(${gray},${gray},${Math.floor(gray * 0.95)})`;
         
-        // Scattered position. Using 2.0 multiplier to stay within the 2.1x margin
-        const ax = cx + (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 2.0;
-        const ay = cy + (rng() - 0.5) * ASTEROID_CHUNK_SIZE * 2.0;
-        
+        // Use BigInt to prevent precision loss at interstellar distances (10^16+ meters)
         const secSize = 10_000_000_000n;
-        const axBI = BigInt(Math.floor(ax));
-        const ayBI = BigInt(Math.floor(ay));
+        const chunkSizeBI = BigInt(ASTEROID_CHUNK_SIZE);
+        const cxBI = (chunkSizeBI * 1732050n * BigInt(q) + chunkSizeBI * 866025n * BigInt(r)) / 1000000n;
+        const cyBI = chunkSizeBI * 3n * BigInt(r) / 2n;
         
-        const secX = axBI / secSize;
-        const secY = ayBI / secSize;
-        const oX = Number(axBI % secSize);
-        const oY = Number(ayBI % secSize);
+        const offsetXM = Math.floor((rng() - 0.5) * ASTEROID_CHUNK_SIZE * 1.1);
+        const offsetYM = Math.floor((rng() - 0.5) * ASTEROID_CHUNK_SIZE * 1.1);
+        
+        const axBI = cxBI + BigInt(offsetXM);
+        const ayBI = cyBI + BigInt(offsetYM);
+        
+        // Correctly handle negative BigInt modulo arithmetic
+        let secX = axBI / secSize;
+        let secY = ayBI / secSize;
+        let oX = Number(axBI % secSize);
+        let oY = Number(ayBI % secSize);
+        if (oX < 0) { secX -= 1n; oX += Number(secSize); }
+        if (oY < 0) { secY -= 1n; oY += Number(secSize); }
         
         const totalCapacity = Math.floor(Math.pow(radius / 100, 3) * 1000);
+        const ax = Number(axBI);
+        const ay = Number(ayBI);
         
         asteroids.push({
            id: `ast-${q}-${r}-${i}`,
-           sectorX: secX,
-           sectorY: secY,
+           sectorX: secX.toString(),
+           sectorY: secY.toString(),
            offsetX: oX,
            offsetY: oY,
            rx: ax, 

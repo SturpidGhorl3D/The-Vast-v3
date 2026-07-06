@@ -172,4 +172,11 @@ export class ResearchManager {
   public branchOut(baseTechId: string) {
     this.rollInnovationChoices(2, baseTechId);
   }
+
+  public hasFeature(featureId: string): boolean {
+    return this.engine.researchedTechs.some(techId => {
+       const tech = TECHNOLOGIES[techId];
+       return tech?.unlocks?.features?.includes(featureId);
+    });
+  }
 }

@@ -15,6 +15,9 @@
 - Develop features with mobile users in mind
 - Use russian language as basis
 
+## Framework & Build System
+- **Framework Transition:** The project was migrated from Next.js to **Vite** (with an Express + Socket.io custom server in `server.ts`) to fix Out-of-Memory (OOM) build timeouts and improve compilation reliability in the AI Studio environment. Never attempt to use Next.js specific features, routing, or revert to Next.js without explicit instructions.
+
 ## Entity System & Javascript Truthiness
 - **Player/Entity ID Checks:** In our ECS, `Entity` is a `number`, which means the first entity (e.g., the player) often has an ID of `0`. Because JavaScript evaluates `0` as falsy, you must **NEVER** use truthiness checks like `if (!player)` or `if (engine.player)`. Always use strict comparisons like `if (player === null)` or `if (engine.player !== null)`. This prevents bugs where player 0 is incorrectly treated as missing.
 

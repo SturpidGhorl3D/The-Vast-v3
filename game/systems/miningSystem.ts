@@ -43,29 +43,27 @@ export function miningSystem(
   if (miningComps.length === 0) return;
 
   // Global inventory space check
-  let currentTotal = Object.values(playerInv.resources).reduce((a, b) => a + b, 0);
+  let currentTotal = 0;
+  for (const r in playerInv.resources) {
+      currentTotal += playerInv.resources[r];
+  }
   if (currentTotal >= playerInv.maxCapacity - 0.001) return;
 
   // Only check asteroids within a reasonable range (50km) to avoid performance degradation
   const rangeMargin = 50000;
   const sSize = Number(SECTOR_SIZE_M);
-  const playerWorldX = Number(playerPos.sectorX) * sSize + playerPos.offsetX;
-  const playerWorldY = Number(playerPos.sectorY) * sSize + playerPos.offsetY;
 
-  const visibleAsteroids = engine.asteroidGrid.getVisibleAsteroids(
-      playerWorldX - rangeMargin, playerWorldY - rangeMargin,
-      playerWorldX + rangeMargin, playerWorldY + rangeMargin
-  );
+  const visibleAsteroids = engine.asteroidGrid.getVisibleAsteroids();
   const lockedTarget = engine.miningTargetId ? visibleAsteroids.find(a => a.id === engine.miningTargetId) : null;
   
-  if (engine.miningTargetId && (!lockedTarget || lockedTarget.depleted)) {
+  // Only clear the target if it's explicitly known to be depleted
+  if (engine.miningTargetId && lockedTarget && lockedTarget.depleted) {
       engine.miningTargetId = null;
   }
 
   // ONLY proceed if we have an explicit locked target
   if (lockedTarget === null || lockedTarget === undefined) return;
 
-  const SECTOR_SIZE = 10_000_000_000;
   // Use a clamped dt to prevent huge extraction spikes during lag
   // dt is frame-ratio (1.0 = ~16.6ms), so we divide by 60 to get units per second extraction
   const safeDt = Math.min(dt, 5.0);
@@ -80,8 +78,8 @@ export function miningSystem(
 
     let target: any = null;
 
-    const dx = Number(lockedTarget.sectorX - playerPos.sectorX) * SECTOR_SIZE + (lockedTarget.offsetX - playerPos.offsetX);
-    const dy = Number(lockedTarget.sectorY - playerPos.sectorY) * SECTOR_SIZE + (lockedTarget.offsetY - playerPos.offsetY);
+    const dx = Number(lockedTarget.sectorX - playerPos.sectorX) * sSize + (lockedTarget.offsetX - playerPos.offsetX);
+    const dy = Number(lockedTarget.sectorY - playerPos.sectorY) * sSize + (lockedTarget.offsetY - playerPos.offsetY);
     const worldDist = Math.hypot(dx, dy);
     
     if (worldDist < range) {
@@ -120,17 +118,48 @@ export function miningSystem(
       }
 
       if (totalInAsteroid > 0) {
-          // Take proportionately from all resources in the asteroid
-          // But cap the total taken by the mining speed and remaining space
-          const actualToTakeTotal = Math.min(totalRateThisFrame, totalInAsteroid, spaceLeft);
+          const targetResource = (engine as any).miningTargetResource;
+          const resourceCount = Object.values(asteroidResources).filter(v => v > 0.01).length;
           
-          if (actualToTakeTotal > 0) {
-              for (const [res, amount] of Object.entries(asteroidResources)) {
-                const proportion = totalInAsteroid > 0 ? amount / totalInAsteroid : 1;
-                const resToTake = actualToTakeTotal * proportion;
-                
-                playerInv.resources[res] = (playerInv.resources[res] || 0) + resToTake;
-                asteroidResources[res] -= resToTake;
+          // Target extraction modifier is active only if targetResource is selected and asteroid has more than 1 resource
+          const isTargetActive = targetResource && resourceCount > 1;
+
+          const generalModifier = Math.min(1.0, config?.generalExtractionModifier ?? (0.75 + level * 0.03));
+          const targetModifier = Math.min(1.0, config?.targetExtractionModifier ?? (0.50 + level * 0.05));
+
+          if (isTargetActive) {
+              // Focused extraction - modifier over modifier: generalModifier * targetModifier
+              const availableInAsteroid = asteroidResources[targetResource!] || 0;
+              const combinedModifier = generalModifier * targetModifier;
+              
+              const actualToTakeTotal = Math.min(
+                totalRateThisFrame, 
+                availableInAsteroid, 
+                combinedModifier > 0 ? spaceLeft / combinedModifier : 0
+              );
+
+              if (actualToTakeTotal > 0) {
+                  const gained = actualToTakeTotal * combinedModifier;
+                  playerInv.resources[targetResource!] = (playerInv.resources[targetResource!] || 0) + gained;
+                  asteroidResources[targetResource!] -= actualToTakeTotal;
+              }
+          } else {
+              // Standard extraction (either no target, single resource, or target resource missing)
+              const actualToTakeTotal = Math.min(
+                totalRateThisFrame, 
+                totalInAsteroid, 
+                generalModifier > 0 ? spaceLeft / generalModifier : 0
+              );
+              
+              if (actualToTakeTotal > 0) {
+                  for (const [res, amount] of Object.entries(asteroidResources)) {
+                    const proportion = totalInAsteroid > 0 ? amount / totalInAsteroid : 1;
+                    const resToTake = actualToTakeTotal * proportion;
+                    
+                    const gained = resToTake * generalModifier;
+                    playerInv.resources[res] = (playerInv.resources[res] || 0) + gained;
+                    asteroidResources[res] -= resToTake;
+                  }
               }
           }
           
@@ -143,6 +172,8 @@ export function miningSystem(
             target.depletedAt = Date.now();
             if (engine.miningTargetId === target.id) engine.miningTargetId = null;
           }
+
+          engine.asteroidGrid.registerAsteroidModification(target);
       }
     }
   }

@@ -28,13 +28,7 @@ export class DiscoveryManager {
     
     // Explicitly use BigInt for large world coordinate multiplications to avoid safe integer overflow
     const secSizeBI = BigInt(SECTOR_SIZE_M);
-    this.engine.asteroidGrid.update({
-      sectorX: posRef.sectorX,
-      sectorY: posRef.sectorY,
-      offsetX: posRef.offsetX,
-      offsetY: posRef.offsetY
-    }, { currentSystem: this.engine.currentSystem }, camera.zoom);
-
+    
     const nearbySystems = world.getSystemsInViewport(viewMin.sectorX, viewMin.sectorY, viewMax.sectorX, viewMax.sectorY);
 
     let newCurrentSystem = null;
@@ -62,6 +56,14 @@ export class DiscoveryManager {
       }
     }
     this.engine.currentSystem = newCurrentSystem;
+
+    // We update the asteroid grid around the ship position
+    this.engine.asteroidGrid.update({
+      sectorX: posRef.sectorX,
+      sectorY: posRef.sectorY,
+      offsetX: posRef.offsetX,
+      offsetY: posRef.offsetY
+    }, { currentSystem: this.engine.currentSystem }, camera.zoom);
   }
 
   public performAsteroidScan() {

@@ -3,8 +3,10 @@ import { ECS } from '../engine/ecs';
 import { Position, Velocity } from '../engine/types';
 import { SECTOR_SIZE_M } from '../constants';
 
+const MOVEMENT_COMPONENTS = ['Position', 'Velocity'];
+
 export function movementSystem(ecs: ECS, dt: number) {
-  const entities = ecs.getEntitiesWith(['Position', 'Velocity']);
+  const entities = ecs.getEntitiesWith(MOVEMENT_COMPONENTS, 'Position,Velocity');
   for (const entity of entities) {
     const pos = ecs.getPosition(entity)!;
     const vel = ecs.getComponent<Velocity>(entity, 'Velocity')!;

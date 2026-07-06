@@ -322,7 +322,7 @@ export class CelestialRenderer extends BaseRenderer {
 
      mat.setTexture("uNoiseTex3D", this.noiseTex3D);
      mat.backFaceCulling = false;
-     mat.disableLighting = true;
+     (mat as any).disableLighting = true;
      // CRITICAL: Premultiplied alpha mode for combined occlusion (alpha=1) and additive glow (alpha=0)!
      mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHATESTANDBLEND; 
      mat.alphaMode = BABYLON.Engine.ALPHA_PREMULTIPLIED;
@@ -443,7 +443,8 @@ export class CelestialRenderer extends BaseRenderer {
        
        let intensity = 1.0;
        if (len > 0) {
-           mat.setVector3("uLightDir", new BABYLON.Vector3(lx / len, ly / len, 0.2));
+           // Invert ly because Babylon shader plane Y is UP, but screen Y is DOWN
+           mat.setVector3("uLightDir", new BABYLON.Vector3(lx / len, -ly / len, 0.2));
            const rInAU = len / 149597870700; 
            // 2.0 at star surface, 1.0 at 1 AU, 0.1 at 19 AU, min 0.05 
            intensity = Math.max(0.05, 2.0 / (1.0 + rInAU)); 

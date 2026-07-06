@@ -24,8 +24,11 @@ function normalizeAngle(a: number) {
     return a;
 }
 
+const AI_COMPONENTS = ['AIState', 'Position', 'Velocity'];
+const FACTION_COMPONENTS = ['Position', 'Faction'];
+
 export function aiSystem(ecs: ECS, dt: number) {
-    const entities = ecs.getEntitiesWith(['AIState', 'Position', 'Velocity']);
+    const entities = ecs.getEntitiesWith(AI_COMPONENTS, 'AIState,Position,Velocity');
 
     for (const entity of entities) {
         const state = ecs.getComponent<AIState>(entity, 'AIState');
@@ -112,7 +115,7 @@ export function aiSystem(ecs: ECS, dt: number) {
                 
                 // Aggro check: if hostile faction nearby
                 if (faction) {
-                   const others = ecs.getEntitiesWith(['Position', 'Faction']);
+                   const others = ecs.getEntitiesWith(FACTION_COMPONENTS, 'Position,Faction');
                    for (const other of others) {
                        if (other === entity) continue;
                        const otherFaction = ecs.getComponent<Faction>(other, 'Faction');

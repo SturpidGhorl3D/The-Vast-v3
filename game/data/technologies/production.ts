@@ -8,6 +8,10 @@ export const prod_basic_refining: Technology = {
   id: 'prod_basic_refining', name: 'Базовая переработка', description: 'Позволяет перерабатывать руду в сплавы.', category: 'PRODUCTION', subtype: 'REFINING', cost: 10000, requirements: ['prod_root'], unlocks: { recipes: ['ore_to_alloy'] }
 };
 
+export const prod_cargo_management: Technology = {
+  id: 'prod_cargo_management', name: 'Логистика трюма', description: 'Открывает возможность тонкого управления грузом, сброса материалов в космос и обмена с другими кораблями.', category: 'PRODUCTION', subtype: 'LOGISTICS', cost: 15000, requirements: ['prod_root'], unlocks: { features: ['cargo_management'] }
+};
+
 export const prod_advanced_refining: Technology = {
   id: 'prod_advanced_refining', name: 'Усовершенствованная металлургия', description: 'Открывает доступ к производству редких сплавов.', category: 'PRODUCTION', subtype: 'REFINING', cost: 30000, requirements: ['prod_basic_refining'], unlocks: { recipes: ['advanced_alloy'] }
 };

@@ -21,6 +21,7 @@ export interface WorldState {
   pendingBranchChoices?: Record<string, string[]>;
   techNodePositions?: Record<string, { x: number; y: number }>;
   techBranchingCounts?: Record<string, number>;
+  modifiedAsteroidChunks?: Record<string, { lastModified: number; asteroids: any[] }>;
 }
 
 const SAVE_PREFIX = 'the_vast_state_';

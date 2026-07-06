@@ -5,8 +5,11 @@ import { Camera } from '../engine/camera';
 import { Position, Hull, Faction, GlobalCoords } from '../engine/types';
 import { getLargestShipDimension } from '../hullGeometry';
 
+const RENDER_COMPONENTS = ['Position', 'Hull'];
+const LOOT_COMPONENTS = ['Position', 'Loot'];
+
 export function renderSystem(ecs: ECS, renderer: Renderer, camera: Camera, internalView: boolean = false, engine?: any) {
-  const entities = ecs.getEntitiesWith(['Position', 'Hull']);
+  const entities = ecs.getEntitiesWith(RENDER_COMPONENTS, 'Position,Hull');
   
   const cw = renderer.width;
   const ch = renderer.height;
@@ -70,14 +73,14 @@ export function renderSystem(ecs: ECS, renderer: Renderer, camera: Camera, inter
   }
 
   // Render Loot
-  const lootEntities = ecs.getEntitiesWith(['Position', 'Loot']);
+  const lootEntities = ecs.getEntitiesWith(LOOT_COMPONENTS, 'Position,Loot');
   for (const entity of lootEntities) {
     const pos = ecs.getPosition(entity)!;
     renderer.drawLoot(pos, camera);
   }
 
   // Render Projectiles
-  renderer.drawProjectiles(engine, camera);
+  // renderer.drawProjectiles(engine, camera);
 
   // Render Target Indicator for Analyzed Target
   if (engine?.analyzedTarget) {

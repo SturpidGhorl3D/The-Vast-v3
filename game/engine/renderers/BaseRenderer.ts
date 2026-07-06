@@ -8,10 +8,18 @@ export class BaseRenderer {
     this.graphics = graphics;
   }
 
+  private static colorCache: Map<string, {color: number, alpha: number}> = new Map();
+
   public parseColor(color: string): { color: number; alpha: number } {
     if (typeof (color as any) === 'number') return { color: color as any as number, alpha: 1 };
     if (!color) return { color: 0x050505, alpha: 1 };
 
+    if (BaseRenderer.colorCache.has(color)) {
+        return BaseRenderer.colorCache.get(color)!;
+    }
+
+    let result = { color: 0x050505, alpha: 1 };
+    
     if (color.startsWith('#')) {
       const hex = color.slice(1);
       let colorNum = 0;
@@ -23,21 +31,20 @@ export class BaseRenderer {
       } else {
         colorNum = parseInt(hex, 16);
       }
-      return { color: colorNum, alpha: 1 };
-    }
-
-    if (color.startsWith('rgb')) {
+      result = { color: colorNum, alpha: 1 };
+    } else if (color.startsWith('rgb')) {
       const matches = color.match(/[\d.]+/g);
       if (matches && matches.length >= 3) {
         const r = parseInt(matches[0], 10);
         const g = parseInt(matches[1], 10);
         const b = parseInt(matches[2], 10);
         const a = matches.length >= 4 ? parseFloat(matches[3]) : 1;
-        return { color: (r << 16) | (g << 8) | b, alpha: a };
+        result = { color: (r << 16) | (g << 8) | b, alpha: a };
       }
     }
 
-    return { color: 0x050505, alpha: 1 };
+    BaseRenderer.colorCache.set(color, result);
+    return result;
   }
 
   public colorToNumber(color: string): number {
